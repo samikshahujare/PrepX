@@ -1,0 +1,142 @@
+# ==============================================================================
+# PrepX Git Ignore Rules
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Environment & Secrets (NEVER COMMIT SENSITIVE KEYS)
+# ------------------------------------------------------------------------------
+.env
+.env.*
+*.env
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+!.env.example
+!.env.*.example
+!**/.env.example
+!**/.env.*.example
+
+# ------------------------------------------------------------------------------
+# Node.js / Next.js / Frontend
+# ------------------------------------------------------------------------------
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+build/
+frontend/build/
+dist/
+frontend/dist/
+.turbo/
+frontend/.turbo/
+*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+*.bak
+*.bak.*
+*.backup
+
+# npm / yarn / pnpm logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ------------------------------------------------------------------------------
+# Python / FastAPI / Backend
+# ------------------------------------------------------------------------------
+__pycache__/
+backend/**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual Environments
+env/
+venv/
+.venv/
+ENV/
+backend/env/
+backend/venv/
+backend/.venv/
+backend/ENV/
+
+# Python Distribution / Packaging
+/build/
+/dist/
+/develop-eggs/
+/downloads/
+/eggs/
+/.eggs/
+/parts/
+/sdist/
+/var/
+/wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ------------------------------------------------------------------------------
+# Testing & Code Coverage
+# ------------------------------------------------------------------------------
+.pytest_cache/
+backend/.pytest_cache/
+.coverage
+backend/.coverage
+htmlcov/
+backend/htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+
+# ------------------------------------------------------------------------------
+# Uploads, Media & User Generated Content
+# ------------------------------------------------------------------------------
+uploads/
+backend/uploads/
+media/
+backend/media/
+resumes/
+backend/resumes/
+*.sqlite3
+*.db
+*.db-journal
+*.wal
+
+# ------------------------------------------------------------------------------
+# Scratch, Blender & Experimental Workspaces
+# ------------------------------------------------------------------------------
+scratch/
+*.blend
+*.blend1
+*.blend2
+
+# ------------------------------------------------------------------------------
+# Logs & Temporary Files
+# ------------------------------------------------------------------------------
+logs/
+backend/logs/
+*.log
+*.tmp
+*.temp
+
+# ------------------------------------------------------------------------------
+# IDEs & System Files
+# ------------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
