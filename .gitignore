@@ -115,6 +115,8 @@ backend/resumes/
 # Scratch, Blender & Experimental Workspaces
 # ------------------------------------------------------------------------------
 scratch/
+checkpoints/
+.superpowers/
 *.blend
 *.blend1
 *.blend2

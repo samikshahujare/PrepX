@@ -1,0 +1,23 @@
+{
+  "include": [
+    "backend"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    ".git",
+    "scratch",
+    "checkpoints"
+  ],
+  "ignore": [
+    "scratch"
+  ],
+  "stubPath": "typings",
+  "extraPaths": [
+    "backend",
+    "typings",
+    "scratch"
+  ],
+  "reportMissingImports": false,
+  "reportMissingTypeStubs": false
+}

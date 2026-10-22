@@ -21,7 +21,9 @@ export default function LoginPage() {
 
     try {
       await authService.login(email, password);
-      router.push("/interview/setup");
+      const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+      const redirect = searchParams?.get("redirect") || "/dashboard";
+      router.push(redirect);
     } catch (err: any) {
       const serverMsg = err.response?.data?.message || err.response?.data?.error?.message;
       if (serverMsg) {

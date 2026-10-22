@@ -14,6 +14,10 @@ class InterviewEngineResponse:
     emotion: str = "NEUTRAL"
     gesture: str = "RESTING_DESK"
     mouth: str = "SPEAKING"
+    answer_quality: Optional[Dict[str, Any]] = None
+    question_action: str = "next_topic"  # "repeat" | "clarify" | "follow_up" | "next_topic"
+    intent: str = "answer"  # "answer" | "repeat_request" | "clarification_request" | "unable_to_answer"
+    answer_sufficiency: str = "sufficient"  # "empty" | "unclear" | "insufficient" | "partial" | "sufficient"
 
 
 class BaseInterviewEngine(ABC):
@@ -21,7 +25,7 @@ class BaseInterviewEngine(ABC):
 
     @abstractmethod
     def generate_initial_greeting(
-        self, session: InterviewSession, first_question: Question
+        self, session: InterviewSession, first_question: Question, **kwargs: Any
     ) -> str:
         """Generate the opening interviewer greeting and the first question."""
         pass
@@ -34,6 +38,8 @@ class BaseInterviewEngine(ABC):
         candidate_response: str,
         conversation_history: List[Dict[str, Any]],
         next_question: Optional[Question],
+        **kwargs: Any,
     ) -> InterviewEngineResponse:
         """Process candidate's spoken/text response and generate the interviewer's next statement or question."""
         pass
+

@@ -147,6 +147,14 @@ export class VisemeEngine {
     };
   }
 
+  public isQueueEmpty(): boolean {
+    return this.queue.length === 0;
+  }
+
+  public getRemainingCount(): number {
+    return this.queue.length;
+  }
+
   public clear() {
     if (this.timer) {
       clearTimeout(this.timer);

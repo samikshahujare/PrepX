@@ -180,10 +180,9 @@ export default function InterviewSetupPage() {
     if (jdFileInputRef.current) jdFileInputRef.current.value = "";
   };
 
-  // Validation: Ready to Generate?
+  // Validation: Ready to Generate? (Resume is required, JD is optional)
   const canGenerate = Boolean(
     selectedResume &&
-    (jdAnalysis || jdText.trim().length >= 15) &&
     domain &&
     !isGenerating
   );
@@ -194,7 +193,7 @@ export default function InterviewSetupPage() {
     setIsGenerating(true);
 
     try {
-      // Phase A: JD analysis if not yet run
+      // Phase A: JD analysis if text/file was provided (optional)
       let currentJdAnalysis = jdAnalysis;
       if (!currentJdAnalysis && jdText.trim().length >= 15) {
         setGenerationStep("Analyzing job description...");
@@ -219,9 +218,10 @@ export default function InterviewSetupPage() {
 
       setCreatedSession(session);
 
-      // Phase C: Generate tailored questions
+      // Phase C: Generate tailored questions scaled to the configured interview duration
       setGenerationStep("Generating tailored interview questions with Sarah Jenkins...");
-      const questions = await interviewService.generateQuestions(session.id, 5);
+      const targetCount = durationMinutes <= 15 ? 10 : durationMinutes <= 30 ? 16 : durationMinutes <= 45 ? 22 : 28;
+      const questions = await interviewService.generateQuestions(session.id, targetCount);
       setGeneratedQuestions(questions);
 
       setGenerationStep("Interview ready.");
@@ -463,6 +463,9 @@ export default function InterviewSetupPage() {
                 <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
                   <Briefcase className="h-4 w-4 text-indigo-400" />
                   Target Job Description (JD)
+                  <span className="text-[11px] font-normal text-slate-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-full ml-1">
+                    Optional
+                  </span>
                 </h2>
               </div>
 

@@ -192,10 +192,10 @@ export default function AvatarStage({
 
           if (isStrong) {
             targetExpression = "WARM_SMILE";
-            engineRef.current.onCandidateGaveStrongAnswer();
+            engineRef.current.setState("SMILING");
           } else if (isClarification) {
             targetExpression = "CONCERNED";
-            engineRef.current.onCandidateGaveWeakAnswer();
+            engineRef.current.setState("SPEAKING");
           } else if (isGreetingOrClosing) {
             targetExpression = "WARM_SMILE";
             engineRef.current.setState("SMILING");
@@ -450,21 +450,21 @@ export default function AvatarStage({
       )}
 
       {/* 4. Bottom Overlay Bar: Name Tag & Meeting Action Buttons */}
-      <div className="relative z-10 p-4 sm:p-5 flex items-center justify-between flex-wrap gap-3 pointer-events-auto">
+      <div className="relative z-10 p-3 sm:p-3.5 flex items-center justify-between flex-wrap gap-2 pointer-events-auto">
         {/* Sarah Jenkins (AI) Name Tag */}
-        <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/15 shadow-xl">
+        <div className="flex items-center gap-2 px-3 py-1 rounded-xl bg-black/60 backdrop-blur-md border border-white/10 shadow-lg">
           <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-xs sm:text-sm font-bold text-white tracking-wide">
+          <span className="text-xs font-bold text-white tracking-wide">
             Sarah Jenkins (AI)
           </span>
-          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+          <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
             3D AI Interviewer
           </span>
 
           {/* Voice Waveform Indicator */}
           {isSpeaking && (
             <div className="flex items-center gap-0.5 ml-1">
-              {[12, 22, 16, 26, 14, 20].map((h, i) => (
+              {[10, 18, 14, 22, 12, 16].map((h, i) => (
                 <span
                   key={i}
                   className="w-0.5 rounded-full bg-indigo-400 animate-pulse"
@@ -480,34 +480,6 @@ export default function AvatarStage({
 
         {/* Quick Room Floating Actions */}
         <div className="flex items-center gap-2">
-          {onToggleMic && (
-            <button
-              onClick={onToggleMic}
-              className={`p-2 rounded-xl border backdrop-blur-md transition-all ${
-                micEnabled
-                  ? "bg-black/60 border-white/10 text-slate-300 hover:text-white hover:bg-black/80"
-                  : "bg-red-500/20 border-red-500/40 text-red-400 hover:bg-red-500/30"
-              }`}
-              title={micEnabled ? "Mute Microphone" : "Unmute Microphone"}
-            >
-              {micEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-            </button>
-          )}
-
-          {onToggleCamera && (
-            <button
-              onClick={onToggleCamera}
-              className={`p-2 rounded-xl border backdrop-blur-md transition-all ${
-                cameraEnabled
-                  ? "bg-black/60 border-white/10 text-slate-300 hover:text-white hover:bg-black/80"
-                  : "bg-red-500/20 border-red-500/40 text-red-400 hover:bg-red-500/30"
-              }`}
-              title={cameraEnabled ? "Turn Off Camera" : "Turn On Camera"}
-            >
-              {cameraEnabled ? <Video className="h-4 w-4" /> : <VideoOff className="h-4 w-4" />}
-            </button>
-          )}
-
           {onEndInterview && (
             <button
               onClick={onEndInterview}

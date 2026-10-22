@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { InterviewTranscript, InterviewState } from "@/types";
-import { Bot, User, MessageSquare, Sparkles, Mic } from "lucide-react";
+import { Bot, User, MessageSquare, Sparkles, Mic, ArrowDown } from "lucide-react";
 
 interface TranscriptPanelProps {
   transcripts: InterviewTranscript[];
@@ -18,20 +18,42 @@ export default function TranscriptPanel({
   state,
 }: TranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
+  const userHasScrolledUpRef = useRef(false);
+
+  const handleScroll = () => {
+    if (!scrollRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    const isUp = distanceFromBottom > 60;
+    setUserScrolledUp(isUp);
+    userHasScrolledUpRef.current = isUp;
+  };
+
+  const scrollToBottom = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+      setUserScrolledUp(false);
+      userHasScrolledUpRef.current = false;
+    }
+  };
 
   useEffect(() => {
-    if (scrollRef.current) {
+    if (!userHasScrolledUpRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [transcripts, interimTranscript]);
 
   return (
-    <div className="w-full h-full min-h-[300px] rounded-2xl glass-panel border border-white/10 bg-slate-950/70 flex flex-col p-4 shadow-xl">
+    <div className="relative w-full h-full min-h-0 rounded-2xl glass-panel border border-white/10 bg-slate-950/70 flex flex-col p-3.5 sm:p-4 shadow-xl overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-3">
+      <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-2 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="h-7 w-7 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
-            <MessageSquare className="h-4 w-4" />
+          <div className="h-6 w-6 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+            <MessageSquare className="h-3.5 w-3.5" />
           </div>
           <div>
             <h3 className="text-xs font-bold text-white uppercase tracking-wider">
@@ -50,7 +72,8 @@ export default function TranscriptPanel({
       {/* Message Stream */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto space-y-3.5 pr-1.5 custom-scrollbar"
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1.5 custom-scrollbar"
       >
         {transcripts.length === 0 && !interimTranscript ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
@@ -92,11 +115,6 @@ export default function TranscriptPanel({
                       >
                         {isInterviewer ? "Sarah (AI Interviewer)" : `${candidateName} (Candidate)`}
                       </span>
-                      {t.is_followup && (
-                        <span className="text-[9px] font-semibold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                          Follow-up
-                        </span>
-                      )}
                     </div>
                     <p className="whitespace-pre-wrap">{t.message}</p>
                   </div>
@@ -110,15 +128,15 @@ export default function TranscriptPanel({
               );
             })}
 
-            {/* Interim Speech Indicator Bubble */}
+            {/* Live Interim Speech Bubble */}
             {interimTranscript && (
               <div className="flex gap-2.5 justify-end animate-pulse">
-                <div className="max-w-[80%] rounded-2xl p-3 text-xs leading-relaxed bg-indigo-950/60 border border-indigo-500/40 text-indigo-200 italic">
-                  <div className="flex items-center gap-1 mb-1 text-[10px] font-bold text-indigo-400 uppercase">
-                    <Mic className="h-3 w-3 animate-spin" />
+                <div className="max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed bg-indigo-950/70 border border-indigo-500/40 text-indigo-200 italic shadow-lg shadow-indigo-950/40">
+                  <div className="flex items-center gap-1.5 mb-1 text-[10px] font-bold text-indigo-400 uppercase tracking-wider">
+                    <Mic className="h-3 w-3 animate-spin text-cyan-400" />
                     <span>Speaking in real-time...</span>
                   </div>
-                  <p>{interimTranscript}</p>
+                  <p className="whitespace-pre-wrap">{interimTranscript}</p>
                 </div>
                 <div className="h-7 w-7 rounded-xl bg-indigo-600/30 border border-indigo-500/40 flex items-center justify-center text-indigo-200 shrink-0 mt-0.5">
                   <User className="h-4 w-4" />
@@ -128,6 +146,17 @@ export default function TranscriptPanel({
           </>
         )}
       </div>
+
+      {/* Floating Jump-to-Bottom Pill when Scrolled Up */}
+      {userScrolledUp && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 px-3 py-1 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold shadow-lg shadow-indigo-600/40 flex items-center gap-1.5 transition-all animate-bounce"
+        >
+          <ArrowDown className="h-3 w-3" />
+          <span>Latest message</span>
+        </button>
+      )}
     </div>
   );
 }

@@ -44,6 +44,10 @@ class InterviewSession(Base):
     interview_status = Column(String(50), default="idle", nullable=False)  # idle, preparing, active, listening, processing, speaking, paused, completed, error
     started_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
+    paused_at = Column(DateTime(timezone=True), nullable=True)
+    total_paused_seconds = Column(Integer, default=0, nullable=False)
+    feedback = Column(JSON_TYPE, nullable=False, default=dict)
+    topic_coverage = Column(JSON_TYPE, nullable=False, default=dict)
     current_question_index = Column(Integer, default=0, nullable=False)
     created_at = Column(
         DateTime(timezone=True),

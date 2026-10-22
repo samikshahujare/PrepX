@@ -42,6 +42,16 @@ class Settings(BaseSettings):
             f"{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
 
+    # Public URL / Host Configuration for Invitations & Deployments
+    APP_PUBLIC_URL: Union[str, None] = None
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    @property
+    def canonical_frontend_url(self) -> str:
+        """Returns the public application origin without trailing slash."""
+        url = self.APP_PUBLIC_URL or self.FRONTEND_URL or "http://localhost:3000"
+        return url.strip().rstrip("/")
+
     # CORS Configuration
     CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:3000",
@@ -51,11 +61,16 @@ class Settings(BaseSettings):
 
     @field_validator("CORS_ORIGINS", mode="before")
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        origins = []
         if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",") if i.strip()]
-        elif isinstance(v, (list, str)):
-            return v
-        raise ValueError(v)
+            origins = [i.strip().rstrip("/") for i in v.split(",") if i.strip()]
+        elif isinstance(v, list):
+            origins = [str(i).strip().rstrip("/") for i in v if str(i).strip()]
+        elif isinstance(v, str):
+            origins = [v.strip().rstrip("/")]
+        else:
+            raise ValueError(v)
+        return origins
 
     # Multi-LLM Provider Configuration (Failover: Gemini -> NVIDIA -> Groq -> OpenRouter)
     LLM_PROVIDER: str = "gemini"

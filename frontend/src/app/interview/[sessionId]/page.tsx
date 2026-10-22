@@ -53,6 +53,10 @@ export default function InterviewRoomPage() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showCompletionModal, setShowCompletionModal] = useState(false);
 
+  const candidateDisplayName =
+    user?.profile?.full_name ||
+    (user?.email ? user.email.split("@")[0].replace(/[._-]/g, " ") : "Candidate");
+
   // Hardware Media Streams & Device States
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [cameraEnabled, setCameraEnabled] = useState(true);
@@ -62,9 +66,10 @@ export default function InterviewRoomPage() {
   const [candidateAudioLevel, setCandidateAudioLevel] = useState(0);
   const [ttsEnabled, setTtsEnabled] = useState(true);
 
-  // Speech to text interim states
+  // Speech to text states
   const [interimSpeech, setInterimSpeech] = useState("");
   const [finalSpeech, setFinalSpeech] = useState("");
+  const [micNotice, setMicNotice] = useState<string | null>(null);
 
   // Provider refs
   const sttProviderRef = useRef<BrowserSpeechToTextProvider | MockSpeechToTextProvider | null>(null);
@@ -76,6 +81,23 @@ export default function InterviewRoomPage() {
   // Avatar readiness & synchronized speech refs
   const isAvatarReadyRef = useRef<boolean>(false);
   const pendingGreetingRef = useRef<(() => void) | null>(null);
+
+  // Real-time Voice Answer & Silence Detection Refs
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const accumulatedSpeechRef = useRef<string>("");
+  const finalSpeechRef = useRef<string>("");
+  const isSpeakingRef = useRef<boolean>(false);
+  const isProcessingRef = useRef<boolean>(false);
+  const isSubmittingRef = useRef<boolean>(false);
+  const handleSubmitResponseRef = useRef<(text: string) => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+  }, [isSpeaking]);
+
+  useEffect(() => {
+    isProcessingRef.current = isProcessing;
+  }, [isProcessing]);
 
   // 1. Initialize Authentication & Session
   useEffect(() => {
@@ -121,10 +143,9 @@ export default function InterviewRoomPage() {
             {
               id: "q1",
               session_id: sessionId,
-              question_text:
-                "Could you walk me through the architecture of a high-scale distributed web system you designed, and how you handled high concurrency?",
-              category: "System Design",
-              difficulty: "High",
+              question_text: "Tell me about yourself.",
+              category: "Opening",
+              difficulty: "Medium",
               source: "ai_generated",
               sequence_number: 1,
               created_at: new Date().toISOString(),
@@ -132,9 +153,8 @@ export default function InterviewRoomPage() {
             {
               id: "q2",
               session_id: sessionId,
-              question_text:
-                "How do you guarantee database consistency across microservices during network partition failures?",
-              category: "Distributed Data",
+              question_text: "Tell me about a key production system you designed.",
+              category: "Resume",
               difficulty: "High",
               source: "ai_generated",
               sequence_number: 2,
@@ -143,10 +163,9 @@ export default function InterviewRoomPage() {
             {
               id: "q3",
               session_id: sessionId,
-              question_text:
-                "Describe a scenario where a production service experienced latency degradation. How did you diagnose the root cause?",
-              category: "Observability & Performance",
-              difficulty: "Medium",
+              question_text: "How do you ensure data consistency under high concurrent load?",
+              category: "Technical",
+              difficulty: "High",
               source: "ai_generated",
               sequence_number: 3,
               created_at: new Date().toISOString(),
@@ -338,32 +357,85 @@ export default function InterviewRoomPage() {
     }
   }, []);
 
-  // 4. Start Listening Handler
-  const startListeningForCandidate = useCallback(() => {
-    if (!sttProviderRef.current) return;
+  const resetSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  }, []);
 
+  const scheduleSilenceSubmission = useCallback(
+    (currentAccumulated: string) => {
+      resetSilenceTimer();
+      const text = (accumulatedSpeechRef.current || currentAccumulated).trim();
+      if (!text || text.length < 2) return;
+
+      silenceTimerRef.current = setTimeout(() => {
+        const textToSubmit = (accumulatedSpeechRef.current || currentAccumulated).trim();
+        if (
+          textToSubmit.length >= 2 &&
+          !isSpeakingRef.current &&
+          !isProcessingRef.current &&
+          !isSubmittingRef.current
+        ) {
+          console.info(
+            "[STT Voice Turn] Natural silence threshold (5.2s) reached, submitting candidate answer:",
+            textToSubmit
+          );
+          handleSubmitResponseRef.current(textToSubmit);
+        }
+      }, 5200); // 5.2-second natural pause threshold before auto-submitting answer
+    },
+    [resetSilenceTimer]
+  );
+
+  // 4. Start Listening Handler with Strict Microphone Isolation & Silence Auto-Submit
+  const startListeningForCandidate = useCallback(() => {
+    if (!sttProviderRef.current || !micEnabled || isSpeakingRef.current || isProcessingRef.current || isSubmittingRef.current) return;
+
+    resetSilenceTimer();
+    accumulatedSpeechRef.current = "";
+    finalSpeechRef.current = "";
+    setMicNotice(null);
     setInterviewState("listening");
     setInterimSpeech("");
     setFinalSpeech("");
 
     sttProviderRef.current.startListening({
-      onInterimResult: (transcript) => {
-        // Interruption: if candidate speaks while Sarah is speaking, immediately pause Sarah
-        if (isSpeaking && transcript.trim().length > 2) {
-          setIsSpeaking(false);
-          setInterviewState("listening");
+      onSpeechStart: () => {
+        if (isSpeakingRef.current || isProcessingRef.current || isSubmittingRef.current) return;
+        resetSilenceTimer();
+      },
+      onSpeechEnd: () => {
+        if (isSpeakingRef.current || isProcessingRef.current || isSubmittingRef.current) return;
+        // Native utterance end: defer to the natural pause debounce threshold (5.2s) so candidate can resume thinking
+        const text = accumulatedSpeechRef.current.trim();
+        if (text.length >= 2) {
+          scheduleSilenceSubmission(text);
         }
-        setInterimSpeech(transcript);
+      },
+      onInterimResult: (transcript) => {
+        if (isSpeakingRef.current || isProcessingRef.current || isSubmittingRef.current) return;
+        // Combine any accumulated finalized segments with the live progressive interim words
+        const liveText = (finalSpeechRef.current ? `${finalSpeechRef.current} ${transcript}` : transcript).trim();
+        accumulatedSpeechRef.current = liveText;
+        setInterimSpeech(liveText);
+        scheduleSilenceSubmission(liveText);
       },
       onFinalResult: (transcript) => {
-        setFinalSpeech((prev) => {
-          const updated = prev ? `${prev} ${transcript}` : transcript;
-          return updated;
-        });
-        setInterimSpeech("");
+        if (isSpeakingRef.current || isProcessingRef.current || isSubmittingRef.current) return;
+        const cleanFinal = transcript.trim();
+        if (!cleanFinal) return;
+
+        finalSpeechRef.current = cleanFinal;
+        accumulatedSpeechRef.current = cleanFinal;
+        setFinalSpeech(cleanFinal);
+        setInterimSpeech(cleanFinal);
+        scheduleSilenceSubmission(cleanFinal);
       },
       onError: (err) => {
-        console.warn("STT provider notice:", err);
+        console.warn("[Candidate STT Notice]:", err);
+        setMicNotice(err);
       },
       onStateChange: (listening) => {
         if (!listening && interviewState === "listening") {
@@ -371,24 +443,40 @@ export default function InterviewRoomPage() {
         }
       },
     });
-  }, [interviewState, isSpeaking]);
+  }, [micEnabled, interviewState, resetSilenceTimer, scheduleSilenceSubmission]);
 
   const handleSpeakingEnd = useCallback(() => {
     setIsSpeaking(false);
-    if (pendingSpeechDoneRef.current) {
-      const cb = pendingSpeechDoneRef.current;
-      pendingSpeechDoneRef.current = null;
-      cb();
-    } else {
-      startListeningForCandidate();
-    }
+    isSpeakingRef.current = false;
+    // Enforce 350ms acoustic transition guard delay before opening candidate mic
+    setTimeout(() => {
+      if (pendingSpeechDoneRef.current) {
+        const cb = pendingSpeechDoneRef.current;
+        pendingSpeechDoneRef.current = null;
+        cb();
+      } else {
+        startListeningForCandidate();
+      }
+    }, 350);
   }, [startListeningForCandidate]);
 
   // 5. Speak Interviewer Text Handler (routed authoritatively via Local Sarah TTS)
   const speakInterviewerMessage = useCallback(
     (message: string, onDone?: () => void) => {
+      // Critical Audio Isolation: Immediately stop candidate microphone capture & debounce
+      resetSilenceTimer();
+      accumulatedSpeechRef.current = "";
+      finalSpeechRef.current = "";
+      isSubmittingRef.current = false;
+      if (sttProviderRef.current) {
+        sttProviderRef.current.stopListening();
+      }
+      setInterimSpeech("");
+      setFinalSpeech("");
+
       if (!ttsEnabled) {
         setIsSpeaking(false);
+        isSpeakingRef.current = false;
         onDone?.();
         return;
       }
@@ -396,28 +484,10 @@ export default function InterviewRoomPage() {
       pendingSpeechDoneRef.current = onDone || null;
       setInterviewerMessage(message);
       setIsSpeaking(true);
+      isSpeakingRef.current = true;
       setInterviewState("speaking");
-
-      // Enable candidate background listening so candidate can interrupt if they speak
-      if (sttProviderRef.current && micEnabled && !sttProviderRef.current.isListening()) {
-        sttProviderRef.current.startListening({
-          onInterimResult: (transcript) => {
-            if (transcript.trim().length > 2) {
-              console.log("[INTERRUPTION] Candidate interrupted Sarah:", transcript);
-              setIsSpeaking(false);
-              setInterviewState("listening");
-            }
-            setInterimSpeech(transcript);
-          },
-          onFinalResult: (transcript) => {
-            setFinalSpeech((prev) => (prev ? `${prev} ${transcript}` : transcript));
-            setInterimSpeech("");
-          },
-          onError: () => {},
-        });
-      }
     },
-    [ttsEnabled, micEnabled]
+    [ttsEnabled, resetSilenceTimer]
   );
 
   // 6. Action: Start Interview
@@ -431,8 +501,16 @@ export default function InterviewRoomPage() {
       sessionId === "sarah";
 
     if (isDemo) {
-      const greeting =
-        "Good morning! I'm Sarah Jenkins, your AI technical interviewer today. Let's begin. Could you walk me through the architecture of a high-scale distributed web system you designed, and how you handled high concurrency?";
+      const candidateName = user?.profile?.full_name?.split(" ")[0] || "there";
+      const currentHour = new Date().getHours();
+      const timeGreeting =
+        currentHour < 12
+          ? "Good morning"
+          : currentHour < 17
+          ? "Good afternoon"
+          : "Good evening";
+
+      const greeting = `${timeGreeting}, ${candidateName}! I'm Sarah Jenkins, your AI technical interviewer today at PrepX. Let's begin: Tell me about yourself.`;
       setInterviewerMessage(greeting);
       const greetingTranscript: InterviewTranscript = {
         id: "t1",
@@ -458,7 +536,12 @@ export default function InterviewRoomPage() {
     }
 
     try {
-      const startData = await interviewService.startInterviewSession(sessionId);
+      const now = new Date();
+      const startData = await interviewService.startInterviewSession(sessionId, {
+        client_local_time: now.toISOString(),
+        client_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        client_hour: now.getHours(),
+      });
       setCurrentQuestion(startData.current_question || null);
       setCurrentQuestionIndex(startData.current_question_index);
       setTotalQuestions(startData.total_questions);
@@ -495,16 +578,24 @@ export default function InterviewRoomPage() {
 
   // 7. Action: Submit Candidate Response
   const handleSubmitResponse = async (responseText: string) => {
-    if (!responseText.trim() || isProcessing) return;
+    resetSilenceTimer();
+    accumulatedSpeechRef.current = "";
+    finalSpeechRef.current = "";
+    if (!responseText.trim() || isProcessingRef.current || isSubmittingRef.current) return;
 
     if (sttProviderRef.current) {
       sttProviderRef.current.stopListening();
     }
 
+    isSubmittingRef.current = true;
     setIsProcessing(true);
+    isProcessingRef.current = true;
     setInterviewState("processing");
     setInterimSpeech("");
     setFinalSpeech("");
+
+    // Trigger interviewer cognitive thinking animation on avatar
+    (window as any).__sarahAvatar?.onInterviewerThinking?.();
 
     const isDemo =
       sessionId?.startsWith("demo") ||
@@ -526,13 +617,31 @@ export default function InterviewRoomPage() {
       setTranscripts(updatedTrans);
 
       // Enforce natural cognitive thinking pause
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      const followUpMsg = isFollowup
-        ? "Excellent explanation. That demonstrates sound technical judgment. Let's transition to data consistency across microservices."
-        : "That's an insightful approach to managing concurrency and caching. Could you elaborate on how you handled distributed transactions and data consistency during network failures?";
+      const cleanResp = responseText.trim().toLowerCase();
+      const isRepeatReq = /what could you please|could you repeat|repeat|pardon/i.test(cleanResp);
+      const isMinimalYes = cleanResp === "yes" || cleanResp === "yeah" || cleanResp === "yep";
 
-      setIsFollowup(!isFollowup);
+      let followUpMsg: string;
+      let nextIsFollowup = isFollowup;
+
+      if (isRepeatReq) {
+        followUpMsg = `Of course. ${currentQuestion?.question_text || "Tell me about yourself."}`;
+        nextIsFollowup = false;
+      } else if (isMinimalYes) {
+        followUpMsg = "Could you elaborate on the specific tools and technical trade-offs you considered?";
+        nextIsFollowup = true;
+      } else if (!isFollowup) {
+        followUpMsg = "What was your specific contribution to that project?";
+        nextIsFollowup = true;
+      } else {
+        followUpMsg = "Understood. How do you ensure data consistency under high concurrent load?";
+        nextIsFollowup = false;
+        setCurrentQuestionIndex((prev) => Math.min(prev + 1, 3));
+      }
+
+      setIsFollowup(nextIsFollowup);
       setInterviewerMessage(followUpMsg);
 
       const sarahTranscript: InterviewTranscript = {
@@ -542,11 +651,13 @@ export default function InterviewRoomPage() {
         speaker: "interviewer",
         message: followUpMsg,
         sequence_number: updatedTrans.length + 1,
-        is_followup: !isFollowup,
+        is_followup: nextIsFollowup,
         created_at: new Date().toISOString(),
       };
       setTranscripts([...updatedTrans, sarahTranscript]);
       setIsProcessing(false);
+      isProcessingRef.current = false;
+      isSubmittingRef.current = false;
 
       speakInterviewerMessage(followUpMsg, () => {
         startListeningForCandidate();
@@ -561,6 +672,17 @@ export default function InterviewRoomPage() {
         sessionId,
         responseText.trim()
       );
+
+      // Avatar reaction based on evaluated answer quality
+      if (result.answer_quality) {
+        const action = result.answer_quality.interviewer_action;
+        const score = result.answer_quality.score;
+        if (action === "STRONG_ANSWER" || (score !== undefined && score >= 8)) {
+          (window as any).__sarahAvatar?.onCandidateGaveStrongAnswer?.();
+        } else if (action === "WEAK_ANSWER" || (score !== undefined && score < 5)) {
+          (window as any).__sarahAvatar?.onCandidateGaveWeakAnswer?.();
+        }
+      }
 
       // Enforce natural cognitive thinking delay (~1100ms minimum)
       const elapsed = Date.now() - submitStartTime;
@@ -597,17 +719,26 @@ export default function InterviewRoomPage() {
       setInterviewState("error");
     } finally {
       setIsProcessing(false);
+      isProcessingRef.current = false;
+      isSubmittingRef.current = false;
     }
   };
 
+  useEffect(() => {
+    handleSubmitResponseRef.current = handleSubmitResponse;
+  });
+
   // 8. Action: Next Question Skip
   const handleNextQuestion = async () => {
-    if (isProcessing) return;
+    if (isProcessingRef.current) return;
+    resetSilenceTimer();
+    accumulatedSpeechRef.current = "";
     if (sttProviderRef.current) {
       sttProviderRef.current.stopListening();
     }
 
     setIsProcessing(true);
+    isProcessingRef.current = true;
     try {
       const result = await interviewService.advanceNextQuestion(sessionId);
       const updatedTranscripts = await interviewService.getInterviewTranscripts(sessionId);
@@ -632,16 +763,21 @@ export default function InterviewRoomPage() {
       console.error("Failed to advance question:", err);
     } finally {
       setIsProcessing(false);
+      isProcessingRef.current = false;
     }
   };
 
   // 9. Action: Pause Interview
   const handlePauseInterview = async () => {
+    resetSilenceTimer();
+    accumulatedSpeechRef.current = "";
     if (sttProviderRef.current) {
       sttProviderRef.current.stopListening();
     }
     setIsSpeaking(false);
+    isSpeakingRef.current = false;
     setInterviewState("paused");
+    (window as any).__sarahAvatar?.onInterviewPaused?.();
     try {
       await interviewService.pauseInterviewSession(sessionId);
     } catch (e) {
@@ -651,6 +787,7 @@ export default function InterviewRoomPage() {
 
   // 10. Action: Resume Interview
   const handleResumeInterview = async () => {
+    (window as any).__sarahAvatar?.onInterviewResumed?.();
     try {
       await interviewService.resumeInterviewSession(sessionId);
       setInterviewState("active");
@@ -668,6 +805,8 @@ export default function InterviewRoomPage() {
 
   // 11. Action: End Interview
   const handleEndInterview = async () => {
+    resetSilenceTimer();
+    accumulatedSpeechRef.current = "";
     if (sttProviderRef.current) {
       sttProviderRef.current.stopListening();
     }
@@ -675,7 +814,9 @@ export default function InterviewRoomPage() {
       mediaStream.getTracks().forEach((track) => track.stop());
     }
     setIsSpeaking(false);
+    isSpeakingRef.current = false;
     setInterviewState("completed");
+    (window as any).__sarahAvatar?.stop?.();
 
     // Clean up persistent session engine on explicit interview end
     AvatarEngine.destroySessionEngine("active_interview");
@@ -767,28 +908,30 @@ export default function InterviewRoomPage() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#0a0d14] text-slate-100">
+    <div className="min-h-screen lg:h-screen lg:max-h-screen flex flex-col bg-[#0a0d14] text-slate-100 overflow-x-hidden lg:overflow-hidden">
       <Navbar />
 
-      <main className="flex-1 max-w-[1520px] w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex flex-col gap-4">
+      <main className="flex-1 min-h-0 max-w-[1560px] w-full mx-auto px-3 sm:px-6 lg:px-8 py-2 sm:py-3 flex flex-col gap-3 overflow-hidden">
         {/* Top Room Banner HUD */}
-        <InterviewHUD
-          currentQuestion={currentQuestion}
-          currentIndex={currentQuestionIndex}
-          totalQuestions={totalQuestions}
-          domain={session.domain}
-          company={session.company}
-          targetRole={session.target_role}
-          interviewMode={session.interview_mode}
-          durationMinutes={session.duration_minutes || 30}
-          attemptInfo={session.allowed_attempts ? `Attempt ${session.current_attempt || 1} of ${session.allowed_attempts}` : undefined}
-          isFollowup={isFollowup}
-        />
+        <div className="shrink-0">
+          <InterviewHUD
+            currentQuestion={currentQuestion}
+            currentIndex={currentQuestionIndex}
+            totalQuestions={totalQuestions}
+            domain={session.domain}
+            company={session.company}
+            targetRole={session.target_role}
+            interviewMode={session.interview_mode}
+            durationMinutes={session.duration_minutes || 30}
+            attemptInfo={session.allowed_attempts ? `Attempt ${session.current_attempt || 1} of ${session.allowed_attempts}` : undefined}
+            isFollowup={isFollowup}
+          />
+        </div>
 
         {/* Main Split Grid: Left AI Interviewer Area & Right Candidate/Transcript Area */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1">
+        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 gap-3.5 overflow-hidden">
           {/* Left / Center Main Stage: Dynamic Human-like Female AI Interviewer (Sarah) */}
-          <div className="lg:col-span-7 flex flex-col">
+          <div className="lg:col-span-7 h-[420px] lg:h-full min-h-0 flex flex-col">
             <AvatarProvider
               sessionId={sessionId}
               state={interviewState}
@@ -810,9 +953,9 @@ export default function InterviewRoomPage() {
           </div>
 
           {/* Right Column: Candidate Camera Feed + Live Dialogue Transcript */}
-          <div className="lg:col-span-5 flex flex-col gap-4">
+          <div className="lg:col-span-5 h-auto lg:h-full min-h-0 flex flex-col gap-3 overflow-hidden">
             {/* Candidate Camera Preview */}
-            <div className="h-[210px] sm:h-[230px]">
+            <div className="shrink-0">
               <CandidateVideoPreview
                 stream={mediaStream}
                 cameraEnabled={cameraEnabled}
@@ -820,7 +963,7 @@ export default function InterviewRoomPage() {
                 cameraError={cameraError}
                 micError={micError}
                 audioLevel={candidateAudioLevel}
-                candidateName={user?.profile?.full_name || "Candidate"}
+                candidateName={candidateDisplayName}
                 onToggleCamera={handleToggleCamera}
                 onToggleMic={handleToggleMic}
                 onRetryMedia={setupMediaDevices}
@@ -828,11 +971,11 @@ export default function InterviewRoomPage() {
             </div>
 
             {/* Live Transcript Stream */}
-            <div className="flex-1 min-h-[300px]">
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <TranscriptPanel
                 transcripts={transcripts}
                 interimTranscript={interimSpeech}
-                candidateName={user?.profile?.full_name || "Candidate"}
+                candidateName={candidateDisplayName}
                 state={interviewState}
               />
             </div>
@@ -840,30 +983,33 @@ export default function InterviewRoomPage() {
         </div>
 
         {/* Bottom Control Bar */}
-        <InterviewControls
-          state={interviewState}
-          micEnabled={micEnabled}
-          cameraEnabled={cameraEnabled}
-          isProcessing={isProcessing}
-          ttsEnabled={ttsEnabled}
-          onStartInterview={handleStartInterview}
-          onToggleMic={handleToggleMic}
-          onToggleCamera={handleToggleCamera}
-          onToggleTTS={handleToggleTTS}
-          onPauseInterview={handlePauseInterview}
-          onResumeInterview={handleResumeInterview}
-          onEndInterview={handleEndInterview}
-          onNextQuestion={handleNextQuestion}
-          onSubmitResponse={handleSubmitResponse}
-          currentSpeechText={finalSpeech || interimSpeech}
-        />
+        <div className="shrink-0">
+          <InterviewControls
+            state={interviewState}
+            micEnabled={micEnabled}
+            cameraEnabled={cameraEnabled}
+            isProcessing={isProcessing}
+            ttsEnabled={ttsEnabled}
+            onStartInterview={handleStartInterview}
+            onToggleMic={handleToggleMic}
+            onToggleCamera={handleToggleCamera}
+            onToggleTTS={handleToggleTTS}
+            onPauseInterview={handlePauseInterview}
+            onResumeInterview={handleResumeInterview}
+            onEndInterview={handleEndInterview}
+            onNextQuestion={handleNextQuestion}
+            onSubmitResponse={handleSubmitResponse}
+            currentSpeechText={interimSpeech || finalSpeech}
+          />
+        </div>
       </main>
 
       {/* Post-Interview Completion Modal */}
       <InterviewCompletedModal
         isOpen={showCompletionModal}
-        domain={session.domain}
-        company={session.company}
+        sessionId={sessionId}
+        domain={session?.domain || "Engineering"}
+        company={session?.company}
         totalQuestions={totalQuestions}
         transcripts={transcripts}
         onReviewTranscript={() => setShowCompletionModal(false)}

@@ -126,6 +126,7 @@ export interface InterviewSession {
   updated_at: string;
   questions?: Question[];
   transcripts?: InterviewTranscript[];
+  feedback?: Record<string, any> | InterviewFeedbackReport | null;
 }
 
 export type InterviewState =
@@ -147,6 +148,19 @@ export interface InterviewStartResponse {
   current_question_index: number;
   total_questions: number;
   started_at: string;
+  duration_minutes?: number;
+  deadline_at?: string | null;
+  remaining_seconds?: number | null;
+}
+
+export interface AnswerQualityEvaluation {
+  score?: number;
+  relevance?: number;
+  completeness?: number;
+  technical_depth?: number;
+  sentiment?: string;
+  interviewer_action?: string;
+  feedback?: string;
 }
 
 export interface InterviewResponseResult {
@@ -158,6 +172,11 @@ export interface InterviewResponseResult {
   current_question_index: number;
   total_questions: number;
   is_completed: boolean;
+  duration_minutes?: number;
+  remaining_seconds?: number | null;
+  deadline_at?: string | null;
+  topic_coverage?: Record<string, any>;
+  answer_quality?: AnswerQualityEvaluation | null;
 }
 
 export interface InterviewRuntimeState {
@@ -165,8 +184,148 @@ export interface InterviewRuntimeState {
   interview_status: string;
   started_at?: string | null;
   ended_at?: string | null;
+  duration_minutes?: number;
+  paused_at?: string | null;
+  total_paused_seconds?: number;
+  is_paused?: boolean;
+  remaining_seconds?: number;
+  deadline_at?: string | null;
   current_question_index: number;
   total_questions: number;
   current_question?: Question | null;
   transcripts: InterviewTranscript[];
+  feedback?: Record<string, any>;
+  topic_coverage?: Record<string, any>;
 }
+
+export interface FeedbackSkillItem {
+  skill: string;
+  importance: string;
+  what_to_learn: string;
+  why_it_matters: string;
+  what_was_misunderstood: string;
+  stronger_answer_guide: string;
+  suggested_practice_question: string;
+}
+
+export interface InterviewFeedbackReport {
+  overall_score: number;
+  overall_explanation: string;
+  category_scores: Record<string, number>;
+  category_assessments: Record<string, string>;
+  strengths: string[];
+  weaknesses_and_mistakes: string[];
+  project_and_resume_evaluation: string;
+  skills_to_improve: FeedbackSkillItem[];
+  better_answer_guidance: Array<{
+    question: string;
+    candidate_answer?: string;
+    candidate_answer_summary?: string;
+    model_answer_structure?: string;
+    strong_example_answer?: string;
+    recommended_model_answer?: string;
+  }>;
+  action_plan: string[];
+  interview_summary: {
+    domain?: string;
+    company?: string;
+    target_role?: string;
+    interview_mode?: string;
+    difficulty?: string;
+    duration_minutes?: number;
+    actual_elapsed_minutes?: number;
+    questions_completed?: number;
+    completion_status?: string;
+    topics_covered?: string[];
+    topics_unassessed?: string[];
+    [key: string]: any;
+  };
+  is_preliminary?: boolean;
+}
+
+// ==========================================
+// Group Discussion (GD) Interfaces
+// ==========================================
+
+export interface GDParticipant {
+  id: string;
+  session_id: string;
+  user_id?: string | null;
+  guest_id?: string | null;
+  display_name: string;
+  is_host: boolean;
+  role?: string | null;
+  is_guest?: boolean;
+  is_muted: boolean;
+  joined_at: string;
+  left_at?: string | null;
+}
+
+export interface GDSession {
+  id: string;
+  session_code: string;
+  creator_id: string;
+  topic: string;
+  topic_category: string;
+  topic_context?: string | null;
+  duration_minutes: number;
+  max_participants: number;
+  status: "created" | "waiting_for_participants" | "in_progress" | "completed" | "cancelled";
+  started_at?: string | null;
+  ended_at?: string | null;
+  created_at: string;
+  participants: GDParticipant[];
+}
+
+export interface GDInvitation {
+  token: string;
+  join_url: string;
+  whatsapp_share_url: string;
+  email_share_subject: string;
+  email_share_body: string;
+  expires_at: string;
+  is_public?: boolean;
+}
+
+export interface GDTranscriptSegment {
+  id?: string;
+  session_id?: string;
+  participant_id?: string | null;
+  speaker_name: string;
+  is_moderator: boolean;
+  message: string;
+  timestamp_seconds: number;
+  sequence_number?: number;
+  created_at?: string;
+}
+
+export interface GDEvaluation {
+  id: string;
+  session_id: string;
+  participant_id: string;
+  user_id?: string | null;
+  overall_score: number;
+  category_scores: Record<string, number>;
+  strengths: string[];
+  areas_for_improvement: string[];
+  communication_feedback: string;
+  reasoning_feedback: string;
+  listening_feedback: string;
+  missed_opportunities: string[];
+  example_strong_response: string;
+  personalized_plan: {
+    drills?: string[];
+    focus_areas?: string[];
+    recommended_topics?: string[];
+    [key: string]: any;
+  };
+  created_at: string;
+}
+
+export interface GDTopicData {
+  topic: string;
+  category: string;
+  briefing: string;
+  key_perspectives: string[];
+}
+

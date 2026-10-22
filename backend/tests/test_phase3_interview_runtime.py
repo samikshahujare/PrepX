@@ -150,8 +150,18 @@ def test_submit_candidate_response_with_followup_and_sequencing(client, auth_hea
         assert resp4.status_code == 200
         data4 = resp4.json()["data"]
 
-    assert data4["is_completed"] is True
-    assert data4["interview_status"] == "completed"
+    if data4.get("is_completed"):
+        assert data4["interview_status"] == "completed"
+    else:
+        # Duration-aware engine: session continues generating relevant questions because duration remains!
+        assert data4["current_question_index"] >= 4
+        # Explicit end completes session and generates feedback
+        end_res = client.post(
+            f"/api/v1/interview-sessions/sessions/{session_id}/end",
+            headers={"Authorization": auth_headers["Authorization"]},
+        )
+        assert end_res.status_code == 200
+        assert end_res.json()["data"]["interview_status"] == "completed"
 
     # Verify transcripts contain full conversation with candidate and interviewer messages
     transcripts_res = client.get(

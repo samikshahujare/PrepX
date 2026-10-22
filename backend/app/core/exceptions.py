@@ -59,3 +59,41 @@ class UserNotFoundException(PrepXException):
             detail=detail,
             code="USER_NOT_FOUND",
         )
+
+
+class NotFoundException(PrepXException):
+    def __init__(self, detail: str = "Resource not found", code: str = "NOT_FOUND"):
+        super().__init__(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=detail,
+            code=code,
+        )
+
+
+class ValidationException(PrepXException):
+    def __init__(self, detail: str = "Validation failed", code: str = "VALIDATION_ERROR"):
+        super().__init__(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+            code=code,
+        )
+
+
+class UnauthorizedException(PrepXException):
+    def __init__(self, detail: str = "Unauthorized access", code: str = "UNAUTHORIZED"):
+        super().__init__(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=detail,
+            code=code,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+class ForbiddenException(PrepXException):
+    def __init__(self, detail: str = "Access forbidden", code: str = "FORBIDDEN"):
+        super().__init__(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+            code=code,
+        )
+

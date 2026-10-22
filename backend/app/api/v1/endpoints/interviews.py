@@ -1,7 +1,7 @@
 import os
 import tempfile
 import uuid
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_active_user
@@ -15,6 +15,7 @@ from app.schemas.interview import (
     InterviewRuntimeState,
     InterviewSessionCreate,
     InterviewSessionRead,
+    InterviewStartRequest,
     InterviewStartResponse,
     JDAnalysisResult,
     JDParseRequest,
@@ -239,13 +240,18 @@ def get_session_questions(
 )
 def start_interview_session(
     session_id: uuid.UUID,
+    start_req: Optional[InterviewStartRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
     """Activate interview session, present first question, and generate opening AI interviewer greeting."""
     interview_service = InterviewService(db)
     start_data = interview_service.start_interview_runtime(
-        session_id=session_id, user_id=current_user.id
+        session_id=session_id,
+        user_id=current_user.id,
+        client_local_time=start_req.client_local_time if start_req else None,
+        client_timezone=start_req.client_timezone if start_req else None,
+        client_hour=start_req.client_hour if start_req else None,
     )
     return ApiResponse(
         success=True,
@@ -458,3 +464,70 @@ def get_interview_transcripts(
         data=[TranscriptRead.model_validate(t) for t in transcripts],
         message="Transcripts retrieved successfully",
     )
+
+
+# ==========================================
+# Post-Interview Feedback Endpoints
+# ==========================================
+
+@router.get(
+    "/sessions/{session_id}/feedback",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    summary="Get or generate post-interview feedback report",
+)
+@router.get(
+    "/{session_id}/feedback",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+def get_interview_feedback(
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Retrieve comprehensive 9-section feedback report based on interview evidence."""
+    interview_service = InterviewService(db)
+    feedback_report = interview_service.get_feedback(
+        session_id=session_id, user_id=current_user.id
+    )
+    return ApiResponse(
+        success=True,
+        data=feedback_report,
+        message="Post-interview feedback report retrieved successfully",
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/feedback/generate",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    summary="Regenerate post-interview feedback report",
+)
+@router.post(
+    "/{session_id}/feedback/generate",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+def regenerate_interview_feedback(
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Force re-generate feedback report for the session."""
+    interview_service = InterviewService(db)
+    session = interview_service.get_session(session_id=session_id, user_id=current_user.id)
+    # Clear existing feedback to trigger fresh generation
+    session.feedback = {}
+    db.commit()
+    feedback_report = interview_service.get_feedback(
+        session_id=session_id, user_id=current_user.id
+    )
+    return ApiResponse(
+        success=True,
+        data=feedback_report,
+        message="Post-interview feedback report regenerated successfully",
+    )
+

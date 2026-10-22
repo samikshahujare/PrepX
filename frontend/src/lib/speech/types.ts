@@ -3,6 +3,8 @@ export interface SpeechToTextCallbacks {
   onFinalResult?: (transcript: string) => void;
   onError?: (error: string) => void;
   onStateChange?: (listening: boolean) => void;
+  onSpeechStart?: () => void;
+  onSpeechEnd?: () => void;
 }
 
 export interface ISpeechToTextProvider {

@@ -80,6 +80,10 @@ class InterviewSessionRead(BaseModel):
     current_question_index: int = 0
     job_description: Optional[str] = None
     jd_analysis: Dict[str, Any] = Field(default_factory=dict)
+    paused_at: Optional[datetime] = None
+    total_paused_seconds: int = 0
+    feedback: Dict[str, Any] = Field(default_factory=dict)
+    topic_coverage: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
     questions: List[QuestionRead] = Field(default_factory=list)
@@ -99,6 +103,24 @@ class AvatarSemanticBehavior(BaseModel):
     mouth: str = "SPEAKING"
 
 
+class AnswerQualityEvaluation(BaseModel):
+    score: float = Field(7.0, ge=1.0, le=10.0, description="Overall answer quality score")
+    relevance: str = Field("High", description="Relevance to the asked question")
+    completeness: str = Field("Good", description="Completeness of technical explanation")
+    technical_depth: str = Field("Solid", description="Demonstrated engineering depth")
+    needs_followup: bool = Field(False, description="Whether question warrants contextual follow-up")
+    sentiment: str = Field("positive", description="Evaluation sentiment: positive, neutral, concerned")
+    interviewer_action: str = Field("praise_and_advance", description="Recommended recruiter action")
+    strengths: List[str] = Field(default_factory=list, description="Key technical points answered well")
+    areas_for_improvement: List[str] = Field(default_factory=list, description="Points that could be elaborated")
+
+
+class InterviewStartRequest(BaseModel):
+    client_local_time: Optional[str] = Field(None, description="ISO timestamp or local time string from client browser")
+    client_timezone: Optional[str] = Field(None, description="Client timezone (e.g. America/New_York, Asia/Kolkata)")
+    client_hour: Optional[int] = Field(None, ge=0, le=23, description="Client local hour 0-23")
+
+
 class InterviewStartResponse(BaseModel):
     session_id: uuid.UUID
     interview_status: str
@@ -107,6 +129,9 @@ class InterviewStartResponse(BaseModel):
     current_question_index: int
     total_questions: int
     started_at: datetime
+    duration_minutes: int = 30
+    deadline_at: Optional[datetime] = None
+    remaining_seconds: Optional[int] = None
     behavior: Optional[AvatarSemanticBehavior] = None
 
 
@@ -123,7 +148,15 @@ class InterviewResponseResult(BaseModel):
     current_question_index: int
     total_questions: int
     is_completed: bool
+    duration_minutes: int = 30
+    remaining_seconds: Optional[int] = None
+    deadline_at: Optional[datetime] = None
+    topic_coverage: Optional[Dict[str, Any]] = None
     behavior: Optional[AvatarSemanticBehavior] = None
+    answer_quality: Optional[AnswerQualityEvaluation] = None
+    question_action: Optional[str] = "next_topic"  # "repeat" | "clarify" | "follow_up" | "next_topic"
+    intent: Optional[str] = "answer"  # "answer" | "repeat_request" | "clarification_request" | "unable_to_answer"
+    answer_sufficiency: Optional[str] = "sufficient"  # "empty" | "unclear" | "insufficient" | "partial" | "sufficient"
 
 
 class InterviewRuntimeState(BaseModel):
@@ -131,7 +164,41 @@ class InterviewRuntimeState(BaseModel):
     interview_status: str
     started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    duration_minutes: int = 30
+    paused_at: Optional[datetime] = None
+    total_paused_seconds: int = 0
+    is_paused: bool = False
+    remaining_seconds: int = 0
+    deadline_at: Optional[datetime] = None
     current_question_index: int
     total_questions: int
     current_question: Optional[QuestionRead] = None
     transcripts: List[TranscriptRead] = Field(default_factory=list)
+    feedback: Dict[str, Any] = Field(default_factory=dict)
+    topic_coverage: Dict[str, Any] = Field(default_factory=dict)
+
+
+class FeedbackSkillItem(BaseModel):
+    skill: str
+    importance: str = "High"
+    what_to_learn: str
+    why_it_matters: str
+    what_was_misunderstood: str
+    stronger_answer_guide: str
+    suggested_practice_question: str
+
+
+class InterviewFeedbackReport(BaseModel):
+    overall_score: float = Field(..., ge=0.0, le=5.0)
+    overall_explanation: str
+    category_scores: Dict[str, float] = Field(default_factory=dict)
+    category_assessments: Dict[str, str] = Field(default_factory=dict)
+    strengths: List[str] = Field(default_factory=list)
+    weaknesses_and_mistakes: List[str] = Field(default_factory=list)
+    project_and_resume_evaluation: str
+    skills_to_improve: List[FeedbackSkillItem] = Field(default_factory=list)
+    better_answer_guidance: List[Dict[str, str]] = Field(default_factory=list)
+    action_plan: List[str] = Field(default_factory=list)
+    interview_summary: Dict[str, Any] = Field(default_factory=dict)
+    is_preliminary: bool = False
+

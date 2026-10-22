@@ -9,6 +9,7 @@ import {
   InterviewRuntimeState,
   InterviewTranscript,
   JDAnalysisResult,
+  InterviewFeedbackReport,
 } from "@/types";
 
 export const interviewService = {
@@ -108,9 +109,17 @@ export const interviewService = {
 
   // ---------------- Phase 3 Real-time Mock Interview Runtime ----------------
 
-  async startInterviewSession(sessionId: string): Promise<InterviewStartResponse> {
+  async startInterviewSession(
+    sessionId: string,
+    options?: {
+      client_local_time?: string;
+      client_timezone?: string;
+      client_hour?: number;
+    }
+  ): Promise<InterviewStartResponse> {
     const res = await apiClient.post<ApiResponse<InterviewStartResponse>>(
-      `/interview-sessions/sessions/${sessionId}/start`
+      `/interview-sessions/sessions/${sessionId}/start`,
+      options || {}
     );
     return res.data.data;
   },
@@ -164,6 +173,20 @@ export const interviewService = {
   async getInterviewTranscripts(sessionId: string): Promise<InterviewTranscript[]> {
     const res = await apiClient.get<ApiResponse<InterviewTranscript[]>>(
       `/interview-sessions/sessions/${sessionId}/transcripts`
+    );
+    return res.data.data;
+  },
+
+  async getSessionFeedback(sessionId: string): Promise<InterviewFeedbackReport> {
+    const res = await apiClient.get<ApiResponse<InterviewFeedbackReport>>(
+      `/interview-sessions/sessions/${sessionId}/feedback`
+    );
+    return res.data.data;
+  },
+
+  async generateSessionFeedback(sessionId: string): Promise<InterviewFeedbackReport> {
+    const res = await apiClient.post<ApiResponse<InterviewFeedbackReport>>(
+      `/interview-sessions/sessions/${sessionId}/feedback/generate`
     );
     return res.data.data;
   },

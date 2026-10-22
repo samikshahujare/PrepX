@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from app.adapters.interview_engine.base import BaseInterviewEngine, InterviewEngineResponse
 from app.adapters.interview_engine.mock_engine import MockInterviewEngine
@@ -12,38 +13,33 @@ logger = logging.getLogger("prepx.interview_engine")
 class MultiLLMInterviewEngine(BaseInterviewEngine):
     """
     Sarah AI Interview Engine powered by centralized free Multi-LLM Service
-    (Gemini -> NVIDIA NIM -> Groq -> OpenRouter) with automatic failover
-    and semantic recruiter behavior determination.
+    (Gemini -> NVIDIA NIM -> Groq -> OpenRouter) with automatic failover,
+    candidate personalization, time-awareness, anti-hallucination safeguards,
+    and structured answer quality evaluation.
     """
 
     def __init__(self):
         self.mock_fallback = MockInterviewEngine()
 
+    def _determine_time_greeting(self, client_hour: Optional[int] = None) -> str:
+        if client_hour is None:
+            client_hour = datetime.now().hour
+
+        if 5 <= client_hour < 12:
+            return "Good morning"
+        elif 12 <= client_hour < 17:
+            return "Good afternoon"
+        elif 17 <= client_hour < 22:
+            return "Good evening"
+        else:
+            return "Good evening"
+
     def generate_initial_greeting(
-        self, session: InterviewSession, first_question: Question
+        self, session: InterviewSession, first_question: Question, **kwargs: Any
     ) -> str:
-        prompt = (
-            f"You are Sarah Jenkins, a Senior Technical Interviewer conducting a mock interview on PrepX.\n"
-            f"Candidate domain: {session.domain}\n"
-            f"Target company: {session.company or 'General Engineering'}\n"
-            f"Difficulty: {session.difficulty}\n"
-            f"First question to ask: {first_question.question_text}\n\n"
-            f"Generate a professional, warm, concise opening greeting (2-3 sentences) introducing yourself as Sarah and transitioning naturally to the first question."
+        return self.mock_fallback.generate_initial_greeting(
+            session=session, first_question=first_question, **kwargs
         )
-
-        try:
-            res = llm_service.generate(
-                prompt=prompt,
-                system_prompt="You are Sarah Jenkins, an AI Technical Interviewer at PrepX. Keep greeting professional, warm, and concise.",
-                temperature=0.7,
-                max_tokens=300,
-            )
-            if res.success and res.content:
-                return res.content.strip()
-        except Exception as e:
-            logger.warning(f"MultiLLM greeting error: {e}")
-
-        return self.mock_fallback.generate_initial_greeting(session, first_question)
 
     def process_candidate_response(
         self,
@@ -52,11 +48,20 @@ class MultiLLMInterviewEngine(BaseInterviewEngine):
         candidate_response: str,
         conversation_history: List[Dict[str, Any]],
         next_question: Optional[Question],
+        **kwargs: Any,
     ) -> InterviewEngineResponse:
         system_prompt = (
-            "You are Sarah Jenkins, a Senior Technical Interviewer at PrepX. "
-            "You listen attentively, analyze technical substance, and decide whether to ask a sharp contextual follow-up or transition to the next question. "
-            "You also output semantic facial/gestural state for the local 2D avatar. "
+            "You are Sarah Jenkins, a Senior Technical Recruiter and Engineering Interviewer at PrepX. "
+            "You listen attentively, analyze technical substance, correctness, and trade-offs. "
+            "You behave like an experienced human interviewer: "
+            "1. ONE CONCISE QUESTION PER TURN. Every interviewer question must be 1-2 sentences maximum. NEVER combine multiple questions into a single turn or paragraph. "
+            "2. If candidate asks to repeat the question (e.g. 'What could you please?', 'Could you repeat that?'), set question_action: 'repeat', repeat the current question clearly, and DO NOT advance or change the topic. "
+            "3. If candidate gives an empty or silent response, set question_action: 'repeat' and gently repeat the current question. "
+            "4. If candidate gives a minimal one-word answer (e.g. 'yes', 'no', 'sure'), set question_action: 'clarify' and ask ONE concise clarification on the same topic. NEVER praise a one-word answer. "
+            "5. If candidate states they don't know or haven't studied it, acknowledge neutrally and set question_action: 'next_topic'. "
+            "6. If candidate gives a partial answer, set question_action: 'follow_up' and ask ONE relevant follow-up about their stated choice. "
+            "7. If candidate gives a substantive, complete answer, acknowledge briefly and set question_action: 'next_topic' to move to the next planned question. "
+            "8. Anti-Hallucination: Ground questions in candidate's actual resume facts and JD requirements provided. Never invent unmentioned projects or companies. "
             "Output strictly valid JSON with no markdown wrapping."
         )
 
@@ -68,44 +73,74 @@ class MultiLLMInterviewEngine(BaseInterviewEngine):
                 was_already_followup = bool(item.get("is_followup", False))
                 break
 
-        followup_constraint = (
-            "The candidate has just answered a follow-up question. You MUST NOT ask another follow-up for this question. "
-            "Acknowledge the candidate's answer, provide brief feedback, transition to the next question (or wrap up if final question), and set is_followup to false."
-            if was_already_followup else
-            "If the answer is technically interesting but leaves an architectural trade-off or edge case open, you may formulate a concise follow-up question and set is_followup: true. Otherwise, transition to the next question with is_followup: false."
-        )
+        candidate_name = kwargs.get("candidate_name") or ""
+        target_role = session.target_role or session.domain
+
+        candidate_skills = kwargs.get("candidate_skills") or []
+        candidate_projects = kwargs.get("candidate_projects") or []
+        jd_required_skills = kwargs.get("jd_required_skills") or []
+        jd_responsibilities = kwargs.get("jd_responsibilities") or []
+
+        skills_str = ", ".join(candidate_skills[:10]) if candidate_skills else "General CS background"
+        projects_str = ", ".join(candidate_projects[:4]) if candidate_projects else "None specified"
+        jd_skills_str = ", ".join(jd_required_skills[:8]) if jd_required_skills else "General role requirements"
+        jd_resp_str = "; ".join(jd_responsibilities[:2]) if jd_responsibilities else "Core role duties"
 
         user_prompt = f"""Interview Context:
-Domain: {session.domain}
+Role / Domain: {target_role}
 Company: {session.company or 'General Engineering'}
 Difficulty: {session.difficulty}
+Candidate: {candidate_name or 'Candidate'}
+Candidate Resume Skills: {skills_str}
+Candidate Resume Projects: {projects_str}
+JD Key Skills: {jd_skills_str}
+JD Responsibilities: {jd_resp_str}
 
 Recent Conversation:
 {history_formatted}
 
-Current Question: {current_question.question_text if current_question else 'None'}
-Candidate's Answer: {candidate_response}
-Next Question in Line: {next_question.question_text if next_question else 'None (Final Question)'}
+Current Question: {current_question.question_text if current_question else 'Tell me about yourself.'}
+Candidate's Spoken Answer: {candidate_response}
+Next Planned Question: {next_question.question_text if next_question else 'None (Final Question)'}
+Was Last Turn Follow-up / Clarification: {was_already_followup}
 
-Task:
-1. Evaluate candidate answer quality (depth, correctness, specific engineering details).
-2. Follow-up Policy: {followup_constraint}
-3. If transitioning to next question or concluding, integrate next question or a warm wrap-up into interviewer_message.
-4. Select semantic behavior for Sarah:
-   - state: "SPEAKING", "ENCOURAGING", "SMILING", "CONCERNED", "NODDING", "COMPLETED"
-   - emotion: "ENCOURAGING", "WARM_SMILE", "INTERESTED", "CONCERNED", "PROFESSIONAL_SERIOUS"
-   - gesture: "NOD", "NOD_ENCOURAGING", "THINKING_TILT", "RESTING_DESK"
+Task & Decision Rules:
+1. Identify Candidate Intent:
+   - "repeat_request": Candidate didn't hear or asked to repeat (e.g. "What could you please?", "Could you repeat that?"). Action: set question_action="repeat", interviewer_message="Of course! [repeat current question]".
+   - "empty_or_no_answer": Empty or silence. Action: set question_action="repeat".
+   - "unable_to_answer": Stated unfamiliarity ("I don't know", "haven't studied that"). Action: set question_action="next_topic" with neutral acknowledgment.
+   - "answer": Provided an answer. Check sufficiency:
+     * "insufficient": One-word ("yes", "no") or non-answers. Action: set question_action="clarify", ask one concise clarification on the same topic. No praise!
+     * "partial": Relevant but brief (e.g. "I used SMOTE"). If not already follow-up, set question_action="follow_up" and ask ONE concise follow-up about that choice.
+     * "sufficient": Substantive, thorough answer. Set question_action="next_topic" (or 1 deeper follow-up).
+2. Follow-up Policy:
+   - If the candidate just answered a follow-up, you MUST NOT ask another follow-up for this question. Transition to the next topic (question_action="next_topic").
+3. Question Form: ONE CONCISE PRIMARY QUESTION (1-2 sentences). Do NOT combine multiple sub-questions!
 
 Output JSON Schema:
 {{
-  "interviewer_message": "Sarah's spoken response and next question/follow-up",
+  "intent": "answer|repeat_request|clarification_request|unable_to_answer",
+  "answer_sufficiency": "empty|unclear|insufficient|partial|sufficient",
+  "question_action": "repeat|clarify|follow_up|next_topic",
+  "interviewer_message": "Sarah's spoken turn (concise question or acknowledgment + question)",
   "is_followup": boolean,
   "is_completed": boolean,
   "followup_question_text": "string or null",
   "state": "SPEAKING",
-  "emotion": "ENCOURAGING|WARM_SMILE|INTERESTED|CONCERNED|PROFESSIONAL_SERIOUS",
-  "gesture": "NOD|NOD_ENCOURAGING|THINKING_TILT|RESTING_DESK",
-  "mouth": "SPEAKING"
+  "emotion": "WARM_SMILE|INTERESTED|CONCERNED|PROFESSIONAL_SERIOUS",
+  "gesture": "RESTING_DESK|SPEAKING_EMPHASIS_RIGHT|EXPLAINING_OPEN_PALMS|THINKING_TILT",
+  "mouth": "SPEAKING",
+  "answer_quality": {{
+    "score": 8.0,
+    "relevance": "High|Medium|Low",
+    "completeness": "Complete|Good|Partial|Incomplete",
+    "technical_depth": "Deep|Solid|Surface|Weak",
+    "needs_followup": boolean,
+    "sentiment": "positive|neutral|concerned",
+    "interviewer_action": "praise_and_advance|clarify|follow_up|repeat",
+    "strengths": ["string"],
+    "areas_for_improvement": ["string"]
+  }}
 }}
 """
 
@@ -115,39 +150,46 @@ Output JSON Schema:
                 system_prompt=system_prompt,
                 json_mode=True,
                 temperature=0.6,
-                max_tokens=600,
+                max_tokens=800,
             )
 
             if res.success and res.content:
                 cleaned = res.content.replace("```json", "").replace("```", "").strip()
                 data = json.loads(cleaned)
-                is_followup = False if was_already_followup else bool(data.get("is_followup", False))
-                is_completed = bool(data.get("is_completed", next_question is None and not is_followup))
-                if next_question is None and not is_followup:
-                    is_completed = True
+                question_action = data.get("question_action", "next_topic")
+                is_followup = question_action in ["follow_up", "clarify"]
+                if was_already_followup and question_action == "follow_up":
+                    question_action = "next_topic"
+                    is_followup = False
+
+                is_completed = bool(data.get("is_completed", False))
+
+                ans_quality = data.get("answer_quality")
+                if not isinstance(ans_quality, dict):
+                    ans_quality = None
+
                 return InterviewEngineResponse(
                     interviewer_message=data.get("interviewer_message", ""),
                     is_followup=is_followup,
                     is_completed=is_completed,
                     followup_question_text=data.get("followup_question_text") if is_followup else None,
                     state=data.get("state", "SPEAKING"),
-                    emotion=data.get("emotion", "NEUTRAL"),
+                    emotion=data.get("emotion", "INTERESTED"),
                     gesture=data.get("gesture", "RESTING_DESK"),
                     mouth=data.get("mouth", "SPEAKING"),
+                    answer_quality=ans_quality,
+                    question_action=question_action,
+                    intent=data.get("intent", "answer"),
+                    answer_sufficiency=data.get("answer_sufficiency", "sufficient"),
                 )
         except Exception as e:
             logger.warning(f"MultiLLM candidate response processing error: {e}")
 
-        fallback_res = self.mock_fallback.process_candidate_response(
-            session, current_question, candidate_response, conversation_history, next_question
-        )
-        return InterviewEngineResponse(
-            interviewer_message=fallback_res.interviewer_message,
-            is_followup=fallback_res.is_followup,
-            is_completed=fallback_res.is_completed,
-            followup_question_text=fallback_res.followup_question_text,
-            state="SPEAKING",
-            emotion="NEUTRAL",
-            gesture="RESTING_DESK",
-            mouth="SPEAKING",
+        return self.mock_fallback.process_candidate_response(
+            session=session,
+            current_question=current_question,
+            candidate_response=candidate_response,
+            conversation_history=conversation_history,
+            next_question=next_question,
+            **kwargs,
         )

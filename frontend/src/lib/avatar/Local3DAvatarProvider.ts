@@ -24,6 +24,8 @@ interface SarahSkeleton {
   upperarmR: THREE.Bone | null;
   lowerarmR: THREE.Bone | null;
   handR: THREE.Bone | null;
+  fingerBonesL: Map<string, THREE.Bone>;
+  fingerBonesR: Map<string, THREE.Bone>;
 }
 
 export class Local3DAvatarProvider implements IAvatarProvider {
@@ -64,11 +66,14 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     upperarmR: null,
     lowerarmR: null,
     handR: null,
+    fingerBonesL: new Map(),
+    fingerBonesR: new Map(),
   };
   private restRotations: Map<string, THREE.Euler> = new Map();
 
   // Real GLB SkinnedMesh & Morph Targets
   private morphMesh: THREE.SkinnedMesh | null = null;
+  private morphMeshes: THREE.SkinnedMesh[] = [];
   private morphDictionary: { [key: string]: number } = {};
   private morphInfluences: number[] = [];
   private activeMorphValues: Map<string, number> = new Map();
@@ -110,8 +115,18 @@ export class Local3DAvatarProvider implements IAvatarProvider {
   private currentAudioEnergy: number = 0;
 
   // Edge TTS Audio & Analyser
-  private apiBaseUrl: string =
-    process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+  private getApiBaseUrl(): string {
+    if (process.env.NEXT_PUBLIC_API_URL) {
+      return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
+    }
+    if (typeof window !== "undefined") {
+      const { hostname, protocol } = window.location;
+      if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+        return `${protocol}//${hostname}:8000/api/v1`;
+      }
+    }
+    return "http://localhost:8000/api/v1";
+  }
   private audioCtx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
   private audioSourceNode: AudioBufferSourceNode | null = null;
@@ -241,10 +256,12 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     this.scene.add(this.rootGroup);
     this.rootGroup.add(this.characterGroup);
 
-    // 4. Perspective Camera
-    this.camera = new THREE.PerspectiveCamera(32, width / height, 0.1, 30);
-    this.camera.position.set(0, 0.22, 1.95);
-    this.camera.lookAt(0, 0.18, 0);
+    // 4. Perspective Camera calibrated for full upper-body seated portrait framing with hands on desk
+    const aspect = width / height;
+    const initialFov = aspect < 1.15 ? Math.min(38, 31 * (1.15 / Math.max(0.75, aspect))) : 31;
+    this.camera = new THREE.PerspectiveCamera(initialFov, aspect, 0.1, 30);
+    this.camera.position.set(0, 0.02, 1.84);
+    this.camera.lookAt(0, -0.08, 0);
 
     // 5. Studio Lighting
     this.setupLighting();
@@ -292,23 +309,23 @@ export class Local3DAvatarProvider implements IAvatarProvider {
   private setupLighting() {
     if (!this.scene) return;
 
-    const ambientLight = new THREE.AmbientLight(0xf8f9fa, 0.80);
+    const ambientLight = new THREE.AmbientLight(0xf8f9fa, 0.65);
     this.scene.add(ambientLight);
 
-    const keyLight = new THREE.DirectionalLight(0xfff8f0, 1.20);
+    const keyLight = new THREE.DirectionalLight(0xfff8f0, 1.05);
     keyLight.position.set(0.8, 1.8, 2.0);
     this.scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0xe8f0fa, 0.70);
+    const fillLight = new THREE.DirectionalLight(0xe8f0fa, 0.55);
     fillLight.position.set(-1.0, 1.4, 1.6);
     this.scene.add(fillLight);
 
-    const rimLight = new THREE.DirectionalLight(0xf1f5f9, 0.90);
+    const rimLight = new THREE.DirectionalLight(0xf1f5f9, 0.70);
     rimLight.position.set(0.2, 1.8, -1.6);
     this.scene.add(rimLight);
 
-    const deskBounce = new THREE.PointLight(0xfef3c7, 0.40, 3);
-    deskBounce.position.set(0, -0.25, 0.8);
+    const deskBounce = new THREE.PointLight(0xfef3c7, 0.35, 3);
+    deskBounce.position.set(0, -0.30, 0.8);
     this.scene.add(deskBounce);
   }
 
@@ -370,7 +387,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     this.scene.add(bgMesh);
 
     // 2. Scandinavian Light Oak Desk
-    const deskGeo = new THREE.BoxGeometry(4.2, 0.8, 1.6);
+    const deskGeo = new THREE.BoxGeometry(4.0, 0.74, 1.2);
     const woodCanvas = document.createElement("canvas");
     woodCanvas.width = 512;
     woodCanvas.height = 512;
@@ -396,7 +413,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       metalness: 0.05,
     });
     const deskMesh = new THREE.Mesh(deskGeo, deskMat);
-    deskMesh.position.set(0, -0.68, 0.85);
+    deskMesh.position.set(0, -0.64, 0.42);
     this.scene.add(deskMesh);
 
     // 3. Leather Executive Notebook & Pen
@@ -423,7 +440,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     ribbon.rotation.y = 0.15;
     notebookGroup.add(ribbon);
 
-    notebookGroup.position.set(0.72, -0.26, 0.8);
+    notebookGroup.position.set(0.55, -0.25, 0.45);
     notebookGroup.rotation.y = -0.25;
     this.scene.add(notebookGroup);
 
@@ -436,7 +453,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     const pen = new THREE.Mesh(penGeo, penMat);
     pen.rotation.x = Math.PI / 2;
     pen.rotation.z = 0.2;
-    pen.position.set(0.68, -0.235, 0.78);
+    pen.position.set(0.52, -0.225, 0.43);
     this.scene.add(pen);
   }
 
@@ -454,8 +471,28 @@ export class Local3DAvatarProvider implements IAvatarProvider {
           this.characterGroup.position.set(0, -1.35, 0);
           this.characterGroup.add(this.sarahModel);
 
-          // 1. Identify Skeleton Bones
+          // 1. Texture Loader for enhanced skin & photorealistic iris
+          const textureLoader = new THREE.TextureLoader();
+          const enhancedSkinMap = textureLoader.load("/avatars/sarah_skin_diffuse_enhanced.png");
+          enhancedSkinMap.flipY = false;
+          enhancedSkinMap.colorSpace = THREE.SRGBColorSpace;
+
+          const eyeIrisMap = textureLoader.load("/avatars/sarah_eye_iris.png");
+          eyeIrisMap.flipY = false;
+          eyeIrisMap.colorSpace = THREE.SRGBColorSpace;
+
+          // 2. Identify Skeleton Bones & Apply Materials
           this.sarahModel.traverse((child) => {
+            // Keep all rigged features visible (eyebrows, eyelashes, earrings, ponytail)
+            if (
+              child.name.includes("mindfront_eyebrows") ||
+              child.name.includes("mindfront_eyelashes") ||
+              child.name.includes("mind_eyebrows") ||
+              child.name.includes("mind_eyelashes")
+            ) {
+              child.visible = true;
+            }
+
             if ((child as THREE.Bone).isBone) {
               const bone = child as THREE.Bone;
               const name = bone.name;
@@ -502,19 +539,114 @@ export class Local3DAvatarProvider implements IAvatarProvider {
                 case "hand_r":
                   this.bones.handR = bone;
                   break;
+                default:
+                  // Track individual finger joints for natural hand poses
+                  if (
+                    name.startsWith("index_") ||
+                    name.startsWith("middle_") ||
+                    name.startsWith("ring_") ||
+                    name.startsWith("pinky_") ||
+                    name.startsWith("thumb_")
+                  ) {
+                    if (name.endsWith("_l")) {
+                      this.bones.fingerBonesL.set(name, bone);
+                    } else if (name.endsWith("_r")) {
+                      this.bones.fingerBonesR.set(name, bone);
+                    }
+                  }
+                  break;
               }
             }
 
-            // 2. Identify SkinnedMesh with Morph Targets
-            if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
-              const mesh = child as THREE.SkinnedMesh;
+            // 3. Identify SkinnedMesh with Morph Targets & Refine Materials
+            if ((child as THREE.Mesh).isMesh) {
+              const mesh = child as THREE.Mesh;
               mesh.frustumCulled = false;
 
-              if (mesh.morphTargetDictionary && mesh.morphTargetInfluences) {
-                this.morphMesh = mesh;
-                this.morphDictionary = mesh.morphTargetDictionary;
-                this.morphInfluences = mesh.morphTargetInfluences;
+              if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
+                const sMesh = mesh as THREE.SkinnedMesh;
+                if (
+                  sMesh.morphTargetDictionary &&
+                  sMesh.morphTargetInfluences &&
+                  Object.keys(sMesh.morphTargetDictionary).length > 0
+                ) {
+                  this.morphMeshes.push(sMesh);
+                  if (!this.morphMesh) {
+                    this.morphMesh = sMesh;
+                    this.morphInfluences = sMesh.morphTargetInfluences;
+                  }
+                  Object.assign(this.morphDictionary, sMesh.morphTargetDictionary);
+                  console.info(
+                    `[Local3DAvatarProvider] Bound morph mesh: ${sMesh.name || "unnamed"} with ${Object.keys(sMesh.morphTargetDictionary).length} morph targets (total bound meshes: ${this.morphMeshes.length})`
+                  );
+                }
               }
+
+              // Apply Refined Professional Aesthetics to Materials
+              const materials = Array.isArray(mesh.material)
+                ? mesh.material
+                : [mesh.material];
+
+              materials.forEach((m) => {
+                if (!m) return;
+                const mat = m as THREE.MeshStandardMaterial;
+
+                if (mat.name === "Sarah_Skin_PBR" || mat.name === "Sarah_Skin") {
+                  mat.map = enhancedSkinMap;
+                  mat.roughness = 0.54;
+                  mat.metalness = 0.02;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Eye_Iris") {
+                  mat.map = null;
+                  mat.color = new THREE.Color(0x3a2216); // Warm chocolate hazel
+                  mat.roughness = 0.08;
+                  mat.metalness = 0.0;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Eye_Pupil") {
+                  mat.color = new THREE.Color(0x050505);
+                  mat.roughness = 0.05;
+                  mat.metalness = 0.0;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Eye_Sclera") {
+                  mat.color = new THREE.Color(0xf6f4f0);
+                  mat.roughness = 0.20;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Eyebrows_PBR") {
+                  mat.color = new THREE.Color(0x1a0f0a);
+                  mat.roughness = 0.45;
+                  mat.metalness = 0.0;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Eyelashes_PBR") {
+                  mat.color = new THREE.Color(0x0f0b08);
+                  mat.roughness = 0.35;
+                  mat.metalness = 0.0;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Navy_Blazer") {
+                  mat.color = new THREE.Color(0x192536);
+                  mat.roughness = 0.72;
+                  mat.metalness = 0.04;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Cream_Blouse") {
+                  mat.color = new THREE.Color(0xf4efe7);
+                  mat.roughness = 0.65;
+                  mat.metalness = 0.0;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Gold_PBR") {
+                  mat.color = new THREE.Color(0xdeb862);
+                  mat.roughness = 0.20;
+                  mat.metalness = 0.85;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Hair_PBR") {
+                  mat.color = new THREE.Color(0x231610);
+                  mat.roughness = 0.44;
+                  mat.metalness = 0.06;
+                  mat.needsUpdate = true;
+                } else if (mat.name === "Sarah_Teeth_PBR") {
+                  mat.color = new THREE.Color(0xf4f1ea);
+                  mat.roughness = 0.35;
+                  mat.needsUpdate = true;
+                }
+              });
             }
           });
 
@@ -539,21 +671,59 @@ export class Local3DAvatarProvider implements IAvatarProvider {
   }
 
   private applyBaseDeskArmPose() {
-    if (this.bones.upperarmL && this.restRotations.has("upperarm_l")) {
-      const rest = this.restRotations.get("upperarm_l")!;
-      this.bones.upperarmL.rotation.set(rest.x + 0.31, rest.y + 0.17, rest.z - 0.26);
-    }
-    if (this.bones.lowerarmL && this.restRotations.has("lowerarm_l")) {
-      const rest = this.restRotations.get("lowerarm_l")!;
-      this.bones.lowerarmL.rotation.set(rest.x + 0.91, rest.y, rest.z);
-    }
-    if (this.bones.upperarmR && this.restRotations.has("upperarm_r")) {
-      const rest = this.restRotations.get("upperarm_r")!;
-      this.bones.upperarmR.rotation.set(rest.x + 0.31, rest.y - 0.17, rest.z + 0.26);
-    }
-    if (this.bones.lowerarmR && this.restRotations.has("lowerarm_r")) {
-      const rest = this.restRotations.get("lowerarm_r")!;
-      this.bones.lowerarmR.rotation.set(rest.x + 0.91, rest.y, rest.z);
+    const DESK_REST_QUATS = {
+      upperarm_l: new THREE.Quaternion(0.15971, 0.04263, -0.46501, 0.86973),
+      lowerarm_l: new THREE.Quaternion(0.69479, 0.04135, -0.27518, 0.66320),
+      hand_l:     new THREE.Quaternion(0.07527, 0.39813,  0.07505, 0.91115),
+      upperarm_r: new THREE.Quaternion(0.15971, -0.04263, 0.46501, 0.86973),
+      lowerarm_r: new THREE.Quaternion(0.69479, -0.04135, 0.27518, 0.66320),
+      hand_r:     new THREE.Quaternion(0.07527, -0.39813, -0.07505, 0.91115),
+    };
+
+    if (this.bones.upperarmL) this.bones.upperarmL.quaternion.copy(DESK_REST_QUATS.upperarm_l);
+    if (this.bones.lowerarmL) this.bones.lowerarmL.quaternion.copy(DESK_REST_QUATS.lowerarm_l);
+    if (this.bones.handL)     this.bones.handL.quaternion.copy(DESK_REST_QUATS.hand_l);
+    if (this.bones.upperarmR) this.bones.upperarmR.quaternion.copy(DESK_REST_QUATS.upperarm_r);
+    if (this.bones.lowerarmR) this.bones.lowerarmR.quaternion.copy(DESK_REST_QUATS.lowerarm_r);
+    if (this.bones.handR)     this.bones.handR.quaternion.copy(DESK_REST_QUATS.hand_r);
+
+    const FINGER_REST_QUATS: Record<string, [number, number, number, number]> = {
+      "index_01_l": [0.23927, 0.47453, -0.03518, 0.84637],
+      "index_01_r": [0.23927, -0.47453, 0.03518, 0.84637],
+      "index_02_l": [0.29635, 0.00401, 0.00548, 0.95505],
+      "index_02_r": [0.29635, -0.00401, -0.00548, 0.95505],
+      "index_03_l": [0.21805, 0.00356, 0.01834, 0.97576],
+      "index_03_r": [0.21805, -0.00356, -0.01834, 0.97576],
+      "middle_01_l": [0.2287, 0.39013, -0.17355, 0.87486],
+      "middle_01_r": [0.2287, -0.39013, 0.17355, 0.87486],
+      "middle_02_l": [0.23646, 0.00751, 0.0359, 0.97095],
+      "middle_02_r": [0.23646, -0.00751, -0.0359, 0.97095],
+      "middle_03_l": [0.22292, -1e-05, -0.00592, 0.97482],
+      "middle_03_r": [0.22292, 1e-05, 0.00592, 0.97482],
+      "pinky_01_l": [0.17594, 0.25237, -0.30709, 0.90058],
+      "pinky_01_r": [0.17594, -0.25237, 0.30709, 0.90058],
+      "pinky_02_l": [0.26957, 0.00578, 0.02394, 0.96266],
+      "pinky_02_r": [0.26957, -0.00578, -0.02394, 0.96266],
+      "pinky_03_l": [0.1478, -0.002, -0.01115, 0.98895],
+      "pinky_03_r": [0.1478, 0.002, 0.01115, 0.98895],
+      "ring_01_l": [0.18232, 0.35818, -0.24812, 0.88142],
+      "ring_01_r": [0.18232, -0.35818, 0.24812, 0.88142],
+      "ring_02_l": [0.24872, 0.00857, 0.04229, 0.96761],
+      "ring_02_r": [0.24872, -0.00857, -0.04229, 0.96761],
+      "ring_03_l": [0.215, -0.00316, -0.02434, 0.97631],
+      "ring_03_r": [0.215, 0.00316, 0.02434, 0.97631],
+      "thumb_01_l": [0.42501, 0.6938, 0.37788, 0.44183],
+      "thumb_01_r": [0.42501, -0.6938, -0.37788, 0.44183],
+      "thumb_02_l": [0.19638, -0.04083, -0.1791, 0.96317],
+      "thumb_02_r": [0.19638, 0.04083, 0.1791, 0.96317],
+      "thumb_03_l": [0.14205, -0.00692, -0.03281, 0.98929],
+      "thumb_03_r": [0.14205, 0.00692, 0.03281, 0.98929],
+    };
+    for (const [name, q] of Object.entries(FINGER_REST_QUATS)) {
+      const bone = this.bones.fingerBonesL.get(name) || this.bones.fingerBonesR.get(name);
+      if (bone) {
+        bone.quaternion.set(q[0], q[1], q[2], q[3]);
+      }
     }
   }
 
@@ -727,7 +897,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     }
 
     try {
-      const response = await fetch(`${this.apiBaseUrl}/avatar/tts`, {
+      const response = await fetch(`${this.getApiBaseUrl()}/avatar/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -907,6 +1077,16 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       "y_iy_ih_ix_06",
       "jawOpen",
       "mouthClose",
+      "mouthFunnel",
+      "mouthPucker",
+      "mouthLowerDownLeft",
+      "mouthLowerDownRight",
+      "mouthUpperUpLeft",
+      "mouthUpperUpRight",
+      "mouthStretchLeft",
+      "mouthStretchRight",
+      "mouthRollLower",
+      "mouthRollUpper",
     ];
     for (const key of visemeKeys) {
       this.setTargetMorph(key, key === "sil_00" ? 1.0 : 0.0);
@@ -915,7 +1095,14 @@ export class Local3DAvatarProvider implements IAvatarProvider {
 
   public resize(width: number, height: number): void {
     if (!this.renderer || !this.camera) return;
-    this.camera.aspect = width / height;
+    const aspect = width / height;
+    this.camera.aspect = aspect;
+    // Responsive framing: dynamically expand vertical FOV on narrower aspect ratios to prevent shoulder/hand clipping
+    if (aspect < 1.15) {
+      this.camera.fov = Math.min(38, 31 * (1.15 / Math.max(0.75, aspect)));
+    } else {
+      this.camera.fov = 31;
+    }
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
   }
@@ -971,10 +1158,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       }
     }
 
-    if (this.currentState === "LISTENING" && time > this.nextListenNodTime) {
-      this.triggerNod(0.065);
-      this.nextListenNodTime = time + 5.0 + Math.random() * 4.0;
-    }
+    // Periodic listening nod disabled to prevent continuous unrequested head movements
 
     const lerpRate = 5.0;
     this.headCurrentRot.x +=
@@ -1047,6 +1231,10 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       this.setTargetMorph("eyeLookUpLeft", 0);
       this.setTargetMorph("eyeLookUpRight", 0);
     }
+
+    // Natural warm eyelid relaxation to prevent staring/scary look
+    this.setTargetMorph("eyeSquintLeft", 0.05);
+    this.setTargetMorph("eyeSquintRight", 0.05);
   }
 
   private updateBlinking(delta: number, time: number) {
@@ -1114,6 +1302,16 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       "y_iy_ih_ix_06",
       "jawOpen",
       "mouthClose",
+      "mouthFunnel",
+      "mouthPucker",
+      "mouthLowerDownLeft",
+      "mouthLowerDownRight",
+      "mouthUpperUpLeft",
+      "mouthUpperUpRight",
+      "mouthStretchLeft",
+      "mouthStretchRight",
+      "mouthRollLower",
+      "mouthRollUpper",
     ];
 
     // Absolute Audio Rule: If not speaking, strictly neutral mouth
@@ -1133,7 +1331,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
         sum += this.audioFrequencyData[i];
       }
       const avg = sum / this.audioFrequencyData.length;
-      audioEnergy = Math.min(1.5, (avg / 128) * 1.8);
+      audioEnergy = Math.min(1.8, (avg / 44) * 1.5);
     } else {
       audioEnergy = 0.8 + Math.sin(this.clock.getElapsedTime() * 11) * 0.4;
     }
@@ -1142,79 +1340,123 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       (audioEnergy - this.currentAudioEnergy) * Math.min(1, delta * 15.0);
 
     const { intensity, viseme } = this.visemeEngine.update(delta);
+    const speechClock = this.clock.getElapsedTime();
+    const rhythmWave = Math.sin(speechClock * 13.0) * 0.5 + 0.5;
+    const audioDrive = Math.max(0.35, Math.min(1.5, this.currentAudioEnergy));
     const effectiveIntensity = Math.min(
       1.0,
-      intensity * Math.max(0.2, this.currentAudioEnergy)
+      Math.max(0.40, intensity) * audioDrive
     );
 
     for (const key of visemeKeys) {
       this.setTargetMorph(key, 0);
     }
 
-    if (effectiveIntensity > 0.05) {
+    if (effectiveIntensity > 0.05 && viseme !== "sil") {
       switch (viseme) {
         case "aa":
-          this.setTargetMorph("aa_02", 0.75 * effectiveIntensity);
-          this.setTargetMorph("aa_ah_ax_01", 0.55 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
+          this.setTargetMorph("aa_02", 0.85 * effectiveIntensity);
+          this.setTargetMorph("aa_ah_ax_01", 0.65 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.65 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownLeft", 0.40 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownRight", 0.40 * effectiveIntensity);
+          this.setTargetMorph("mouthUpperUpLeft", 0.25 * effectiveIntensity);
+          this.setTargetMorph("mouthUpperUpRight", 0.25 * effectiveIntensity);
           break;
         case "oh":
-          this.setTargetMorph("ow_08", 0.70 * effectiveIntensity);
-          this.setTargetMorph("ao_03", 0.60 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.28 * effectiveIntensity);
+          this.setTargetMorph("ow_08", 0.80 * effectiveIntensity);
+          this.setTargetMorph("ao_03", 0.70 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.50 * effectiveIntensity);
+          this.setTargetMorph("mouthFunnel", 0.60 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownLeft", 0.25 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownRight", 0.25 * effectiveIntensity);
           break;
         case "ou":
-          this.setTargetMorph("w_uw_07", 0.85 * effectiveIntensity);
-          this.setTargetMorph("mouthPucker", 0.35 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.18 * effectiveIntensity);
+          this.setTargetMorph("w_uw_07", 0.90 * effectiveIntensity);
+          this.setTargetMorph("mouthPucker", 0.55 * effectiveIntensity);
+          this.setTargetMorph("mouthFunnel", 0.45 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
           break;
         case "ee":
-          this.setTargetMorph("y_iy_ih_ix_06", 0.80 * effectiveIntensity);
-          this.setTargetMorph("mouthStretchLeft", 0.30 * effectiveIntensity);
-          this.setTargetMorph("mouthStretchRight", 0.30 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.15 * effectiveIntensity);
+          this.setTargetMorph("y_iy_ih_ix_06", 0.85 * effectiveIntensity);
+          this.setTargetMorph("mouthStretchLeft", 0.45 * effectiveIntensity);
+          this.setTargetMorph("mouthStretchRight", 0.45 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownLeft", 0.15 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownRight", 0.15 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.28 * effectiveIntensity);
           break;
         case "ih":
-          this.setTargetMorph("ey_eh_uh_04", 0.65 * effectiveIntensity);
-          this.setTargetMorph("y_iy_ih_ix_06", 0.45 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.20 * effectiveIntensity);
+          this.setTargetMorph("ey_eh_uh_04", 0.75 * effectiveIntensity);
+          this.setTargetMorph("y_iy_ih_ix_06", 0.50 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownLeft", 0.20 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownRight", 0.20 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
           break;
         case "mbp":
-          this.setTargetMorph("p_b_m_21", 0.90 * effectiveIntensity);
-          this.setTargetMorph("mouthClose", 0.40 * effectiveIntensity);
+          this.setTargetMorph("p_b_m_21", 0.95 * effectiveIntensity);
+          this.setTargetMorph("mouthClose", 0.85 * effectiveIntensity);
           this.setTargetMorph("jawOpen", 0.02);
           break;
         case "fv":
           this.setTargetMorph("f_v_18", 0.85 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.12 * effectiveIntensity);
+          this.setTargetMorph("mouthRollLower", 0.30 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.18 * effectiveIntensity);
           break;
         case "th":
           this.setTargetMorph("th_dh_17", 0.85 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.18 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownLeft", 0.15 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownRight", 0.15 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.25 * effectiveIntensity);
           break;
         case "sz":
-          this.setTargetMorph("s_z_15", 0.75 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.12 * effectiveIntensity);
+          this.setTargetMorph("s_z_15", 0.80 * effectiveIntensity);
+          this.setTargetMorph("mouthStretchLeft", 0.25 * effectiveIntensity);
+          this.setTargetMorph("mouthStretchRight", 0.25 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.16 * effectiveIntensity);
           break;
         case "sh":
           this.setTargetMorph("sh_ch_jh_zh_16", 0.85 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.14 * effectiveIntensity);
+          this.setTargetMorph("mouthPucker", 0.25 * effectiveIntensity);
+          this.setTargetMorph("mouthFunnel", 0.25 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.22 * effectiveIntensity);
           break;
         case "kg":
-          this.setTargetMorph("k_g_ng_20", 0.75 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.25 * effectiveIntensity);
+          this.setTargetMorph("k_g_ng_20", 0.80 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownLeft", 0.20 * effectiveIntensity);
+          this.setTargetMorph("mouthLowerDownRight", 0.20 * effectiveIntensity);
+          this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
           break;
         default:
-          this.setTargetMorph("sil_00", 1.0);
+          if (this.currentAudioEnergy > 0.08) {
+            const fallbackJaw = Math.min(0.60, this.currentAudioEnergy * 0.50 * (0.55 + rhythmWave * 0.45));
+            this.setTargetMorph("jawOpen", fallbackJaw);
+            this.setTargetMorph("mouthLowerDownLeft", fallbackJaw * 0.45);
+            this.setTargetMorph("mouthLowerDownRight", fallbackJaw * 0.45);
+            this.setTargetMorph("mouthUpperUpLeft", fallbackJaw * 0.25);
+            this.setTargetMorph("mouthUpperUpRight", fallbackJaw * 0.25);
+            this.setTargetMorph("aa_02", fallbackJaw * 0.40);
+          } else {
+            this.setTargetMorph("sil_00", 1.0);
+          }
           break;
       }
+    } else if (this.isSpeakingActive && this.currentAudioEnergy > 0.08) {
+      // Audio-driven articulation during speech when viseme queue has gap or ended
+      const fallbackJaw = Math.min(0.58, this.currentAudioEnergy * 0.48 * (0.55 + rhythmWave * 0.45));
+      this.setTargetMorph("jawOpen", fallbackJaw);
+      this.setTargetMorph("mouthLowerDownLeft", fallbackJaw * 0.40);
+      this.setTargetMorph("mouthLowerDownRight", fallbackJaw * 0.40);
+      this.setTargetMorph("mouthUpperUpLeft", fallbackJaw * 0.20);
+      this.setTargetMorph("mouthUpperUpRight", fallbackJaw * 0.20);
+      this.setTargetMorph("aa_02", fallbackJaw * 0.35);
     } else {
       this.setTargetMorph("sil_00", 1.0);
     }
   }
 
   private updateFacialExpressions() {
-    const weight = this.expressionWeight;
+    // When actively speaking, attenuate smile weight to 0.30 so the smile adds warmth without locking mouth closed
+    const weight = this.isSpeakingActive ? this.expressionWeight * 0.30 : this.expressionWeight;
 
     const exprKeys = [
       "mouthSmileLeft",
@@ -1259,8 +1501,8 @@ export class Local3DAvatarProvider implements IAvatarProvider {
         this.setTargetMorph("browInnerUp", 0.10 * weight);
         break;
       default:
-        this.setTargetMorph("mouthSmileLeft", 0.08);
-        this.setTargetMorph("mouthSmileRight", 0.08);
+        this.setTargetMorph("mouthSmileLeft", 0.08 * weight);
+        this.setTargetMorph("mouthSmileRight", 0.08 * weight);
         break;
     }
   }
@@ -1268,26 +1510,15 @@ export class Local3DAvatarProvider implements IAvatarProvider {
   private updateHandGestures(delta: number, time: number) {
     if (!this.bones.upperarmR || !this.bones.lowerarmR || !this.bones.handR) return;
     if (!this.bones.upperarmL || !this.bones.lowerarmL || !this.bones.handL) return;
-    if (!this.restRotations.has("upperarm_r") || !this.restRotations.has("lowerarm_r")) return;
-    if (!this.restRotations.has("upperarm_l") || !this.restRotations.has("lowerarm_l")) return;
 
-    const rUpperRest = this.restRotations.get("upperarm_r")!;
-    const rLowerRest = this.restRotations.get("lowerarm_r")!;
-    const lUpperRest = this.restRotations.get("upperarm_l")!;
-    const lLowerRest = this.restRotations.get("lowerarm_l")!;
-
-    // Base resting pose (seated desk rest: arms forward, forearms flexed forward +52° onto desk)
-    const baseRUpperX = rUpperRest.x + 0.31;
-    const baseRUpperY = rUpperRest.y - 0.17;
-    const baseRUpperZ = rUpperRest.z + 0.26;
-    const baseRLowerX = rLowerRest.x + 0.91;
-    const baseRLowerZ = rLowerRest.z;
-
-    const baseLUpperX = lUpperRest.x + 0.31;
-    const baseLUpperY = lUpperRest.y + 0.17;
-    const baseLUpperZ = lUpperRest.z - 0.26;
-    const baseLLowerX = lLowerRest.x + 0.91;
-    const baseLLowerZ = lLowerRest.z;
+    const DESK_REST_QUATS = {
+      upperarm_l: new THREE.Quaternion(0.15971, 0.04263, -0.46501, 0.86973),
+      lowerarm_l: new THREE.Quaternion(0.69479, 0.04135, -0.27518, 0.66320),
+      hand_l:     new THREE.Quaternion(0.07527, 0.39813,  0.07505, 0.91115),
+      upperarm_r: new THREE.Quaternion(0.15971, -0.04263, 0.46501, 0.86973),
+      lowerarm_r: new THREE.Quaternion(0.69479, -0.04135, 0.27518, 0.66320),
+      hand_r:     new THREE.Quaternion(0.07527, -0.39813, -0.07505, 0.91115),
+    };
 
     if (this.gestureProgress < 1.0) {
       this.gestureProgress += delta / this.gestureDuration;
@@ -1295,88 +1526,85 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       // Bell-curve arc guaranteed to smoothly return to 0 at end
       const arc = Math.sin(p * Math.PI);
 
-      switch (this.gestureType) {
-        case "SPEAKING_EMPHASIS_RIGHT": {
-          const lift = arc * 0.20;
-          this.bones.upperarmR.rotation.x = baseRUpperX + lift * 0.12;
-          this.bones.upperarmR.rotation.y = baseRUpperY - lift * 0.10;
-          this.bones.upperarmR.rotation.z = baseRUpperZ - lift * 0.12;
-          this.bones.lowerarmR.rotation.x = baseRLowerX + lift * 0.20;
-          this.bones.handR.rotation.y = arc * 0.20;
-          break;
-        }
-        case "EXPLAINING_OPEN_PALMS": {
-          const lift = arc * 0.18;
-          this.bones.upperarmR.rotation.x = baseRUpperX + lift * 0.12;
-          this.bones.upperarmR.rotation.z = baseRUpperZ - lift * 0.12;
-          this.bones.lowerarmR.rotation.x = baseRLowerX + lift * 0.18;
-          this.bones.handR.rotation.y = arc * 0.20;
+      const targetUpperR = DESK_REST_QUATS.upperarm_r.clone();
+      const targetLowerR = DESK_REST_QUATS.lowerarm_r.clone();
+      const targetHandR  = DESK_REST_QUATS.hand_r.clone();
 
-          this.bones.upperarmL.rotation.x = baseLUpperX + lift * 0.12;
-          this.bones.upperarmL.rotation.z = baseLUpperZ + lift * 0.12;
-          this.bones.lowerarmL.rotation.x = baseLLowerX + lift * 0.18;
-          this.bones.handL.rotation.y = -arc * 0.20;
-          break;
-        }
-        case "THINKING_TILT": {
-          const lift = arc * 0.10;
-          this.bones.upperarmR.rotation.x = baseRUpperX + lift * 0.08;
-          this.bones.lowerarmR.rotation.x = baseRLowerX + lift * 0.12;
-          break;
-        }
-        case "NOD_ENCOURAGING": {
-          const lift = arc * 0.08;
-          this.bones.upperarmR.rotation.x = baseRUpperX + lift * 0.06;
-          this.bones.lowerarmR.rotation.x = baseRLowerX + lift * 0.10;
-          break;
-        }
-        default:
-          break;
+      const liftDeltaUpper = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), arc * 0.16);
+      const liftDeltaLower = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), arc * 0.14);
+      const liftDeltaHand  = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), arc * 0.20);
+
+      targetUpperR.multiply(liftDeltaUpper);
+      targetLowerR.multiply(liftDeltaLower);
+      targetHandR.multiply(liftDeltaHand);
+
+      this.bones.upperarmR.quaternion.slerp(targetUpperR, Math.min(1, delta * 8.0));
+      this.bones.lowerarmR.quaternion.slerp(targetLowerR, Math.min(1, delta * 8.0));
+      this.bones.handR.quaternion.slerp(targetHandR, Math.min(1, delta * 8.0));
+
+      if (this.gestureType === "EXPLAINING_OPEN_PALMS") {
+        const targetUpperL = DESK_REST_QUATS.upperarm_l.clone();
+        const targetLowerL = DESK_REST_QUATS.lowerarm_l.clone();
+        const targetHandL  = DESK_REST_QUATS.hand_l.clone();
+
+        const liftDeltaUpperL = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), arc * 0.16);
+        const liftDeltaLowerL = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), arc * 0.14);
+        const liftDeltaHandL  = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -arc * 0.20);
+
+        targetUpperL.multiply(liftDeltaUpperL);
+        targetLowerL.multiply(liftDeltaLowerL);
+        targetHandL.multiply(liftDeltaHandL);
+
+        this.bones.upperarmL.quaternion.slerp(targetUpperL, Math.min(1, delta * 8.0));
+        this.bones.lowerarmL.quaternion.slerp(targetLowerL, Math.min(1, delta * 8.0));
+        this.bones.handL.quaternion.slerp(targetHandL, Math.min(1, delta * 8.0));
+      } else {
+        this.bones.upperarmL.quaternion.slerp(DESK_REST_QUATS.upperarm_l, Math.min(1, delta * 6.0));
+        this.bones.lowerarmL.quaternion.slerp(DESK_REST_QUATS.lowerarm_l, Math.min(1, delta * 6.0));
+        this.bones.handL.quaternion.slerp(DESK_REST_QUATS.hand_l, Math.min(1, delta * 6.0));
       }
     } else {
-      const returnRate = 4.0;
-      this.bones.upperarmR.rotation.x +=
-        (baseRUpperX - this.bones.upperarmR.rotation.x) * Math.min(1, delta * returnRate);
-      this.bones.upperarmR.rotation.y +=
-        (baseRUpperY - this.bones.upperarmR.rotation.y) * Math.min(1, delta * returnRate);
-      this.bones.upperarmR.rotation.z +=
-        (baseRUpperZ - this.bones.upperarmR.rotation.z) * Math.min(1, delta * returnRate);
-      this.bones.lowerarmR.rotation.x +=
-        (baseRLowerX - this.bones.lowerarmR.rotation.x) * Math.min(1, delta * returnRate);
-      this.bones.lowerarmR.rotation.z +=
-        (baseRLowerZ - this.bones.lowerarmR.rotation.z) * Math.min(1, delta * returnRate);
-      this.bones.handR.rotation.y +=
-        (0 - this.bones.handR.rotation.y) * Math.min(1, delta * returnRate);
+      const returnRate = 5.0;
+      this.bones.upperarmR.quaternion.slerp(DESK_REST_QUATS.upperarm_r, Math.min(1, delta * returnRate));
+      this.bones.lowerarmR.quaternion.slerp(DESK_REST_QUATS.lowerarm_r, Math.min(1, delta * returnRate));
+      this.bones.handR.quaternion.slerp(DESK_REST_QUATS.hand_r, Math.min(1, delta * returnRate));
 
-      this.bones.upperarmL.rotation.x +=
-        (baseLUpperX - this.bones.upperarmL.rotation.x) * Math.min(1, delta * returnRate);
-      this.bones.upperarmL.rotation.y +=
-        (baseLUpperY - this.bones.upperarmL.rotation.y) * Math.min(1, delta * returnRate);
-      this.bones.upperarmL.rotation.z +=
-        (baseLUpperZ - this.bones.upperarmL.rotation.z) * Math.min(1, delta * returnRate);
-      this.bones.lowerarmL.rotation.x +=
-        (baseLLowerX - this.bones.lowerarmL.rotation.x) * Math.min(1, delta * returnRate);
-      this.bones.lowerarmL.rotation.z +=
-        (baseLLowerZ - this.bones.lowerarmL.rotation.z) * Math.min(1, delta * returnRate);
-      this.bones.handL.rotation.y +=
-        (0 - this.bones.handL.rotation.y) * Math.min(1, delta * returnRate);
+      this.bones.upperarmL.quaternion.slerp(DESK_REST_QUATS.upperarm_l, Math.min(1, delta * returnRate));
+      this.bones.lowerarmL.quaternion.slerp(DESK_REST_QUATS.lowerarm_l, Math.min(1, delta * returnRate));
+      this.bones.handL.quaternion.slerp(DESK_REST_QUATS.hand_l, Math.min(1, delta * returnRate));
     }
   }
 
   private flushMorphTargets(delta: number) {
-    if (!this.morphMesh || !this.morphInfluences) return;
+    if (this.morphMeshes.length === 0 && !this.morphMesh) return;
 
     const lerpSpeed = 22.0;
 
     this.targetMorphValues.forEach((targetVal, name) => {
-      const idx = this.morphDictionary[name];
-      if (idx === undefined) return;
+      if (this.morphDictionary[name] === undefined) return;
 
       const currentVal = this.activeMorphValues.get(name) || 0;
       const nextVal = currentVal + (targetVal - currentVal) * Math.min(1.0, delta * lerpSpeed);
 
       this.activeMorphValues.set(name, nextVal);
-      this.morphInfluences[idx] = nextVal;
+
+      // Synchronously flush the calculated morph influence to ALL bound SkinnedMesh primitives
+      // (Face Skin primitive 0, Teeth primitive 4, Lashes, Eyes, etc.)
+      for (const mesh of this.morphMeshes) {
+        if (mesh.morphTargetDictionary && mesh.morphTargetInfluences) {
+          const idx = mesh.morphTargetDictionary[name];
+          if (idx !== undefined) {
+            mesh.morphTargetInfluences[idx] = nextVal;
+          }
+        }
+      }
+
+      if (this.morphMesh && this.morphMesh.morphTargetDictionary && this.morphMesh.morphTargetInfluences) {
+        const primaryIdx = this.morphMesh.morphTargetDictionary[name];
+        if (primaryIdx !== undefined) {
+          this.morphMesh.morphTargetInfluences[primaryIdx] = nextVal;
+        }
+      }
     });
   }
 
@@ -1404,6 +1632,11 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     this.camera = null;
     this.sarahModel = null;
     this.morphMesh = null;
+    this.morphMeshes = [];
+    this.morphDictionary = {};
+    this.morphInfluences = [];
+    this.activeMorphValues.clear();
+    this.targetMorphValues.clear();
     this.isInitialized = false;
   }
 }

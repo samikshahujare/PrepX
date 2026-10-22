@@ -41,18 +41,25 @@ export default function Navbar() {
           {isLoggedIn ? (
             <>
               <Link
-                href="/interview/setup"
-                className="flex items-center gap-2 text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 px-3.5 py-1.5 rounded-lg shadow-md shadow-indigo-600/30 transition-all hover:scale-[1.02]"
-              >
-                <Sparkles className="h-4 w-4" />
-                Prepare Interview
-              </Link>
-              <Link
                 href="/dashboard"
                 className="flex items-center gap-2 text-sm font-medium text-slate-300 hover:text-white px-3 py-2 rounded-lg hover:bg-white/5 transition-colors"
               >
                 <LayoutDashboard className="h-4 w-4 text-indigo-400" />
-                Workspace
+                Mode Select
+              </Link>
+              <Link
+                href="/interview/setup"
+                className="flex items-center gap-2 text-xs sm:text-sm font-medium text-slate-300 hover:text-white px-3 py-2 rounded-lg hover:bg-white/5 transition-colors"
+              >
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                Personal Interview
+              </Link>
+              <Link
+                href="/gd/setup"
+                className="flex items-center gap-2 text-xs sm:text-sm font-medium text-slate-300 hover:text-white px-3 py-2 rounded-lg hover:bg-white/5 transition-colors"
+              >
+                <Bot className="h-4 w-4 text-emerald-400" />
+                GD Arena
               </Link>
               <button
                 onClick={handleLogout}
