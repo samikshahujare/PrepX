@@ -20,14 +20,15 @@ app = FastAPI(
 )
 
 # Configure Cross-Origin Resource Sharing (CORS)
-cors_origins = list(settings.CORS_ORIGINS)
+# Filter out wildcard '*' because allow_credentials=True requires specific origins per CORS specifications
+cors_origins = [orig for orig in settings.CORS_ORIGINS if orig.strip() and orig.strip() != "*"]
 if settings.APP_PUBLIC_URL:
     clean_pub = settings.APP_PUBLIC_URL.strip().rstrip("/")
-    if clean_pub and clean_pub not in cors_origins:
+    if clean_pub and clean_pub != "*" and clean_pub not in cors_origins:
         cors_origins.append(clean_pub)
 if settings.FRONTEND_URL:
     clean_front = settings.FRONTEND_URL.strip().rstrip("/")
-    if clean_front and clean_front not in cors_origins:
+    if clean_front and clean_front != "*" and clean_front not in cors_origins:
         cors_origins.append(clean_front)
 
 app.add_middleware(

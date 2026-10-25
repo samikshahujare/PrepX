@@ -20,6 +20,7 @@ import {
   AvatarInitResult,
   ExternalProviderConfig,
 } from "./types";
+import { getApiBaseUrl } from "@/lib/api";
 
 interface LandmarkCoords {
   headCenter: { x: number; y: number };
@@ -107,10 +108,7 @@ export class LocalSarah2DAvatarProvider implements IAvatarProvider {
   private apiBaseUrl: string;
 
   constructor(config?: ExternalProviderConfig) {
-    this.apiBaseUrl =
-      config?.apiBaseUrl ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      "http://localhost:8000/api/v1";
+    this.apiBaseUrl = config?.apiBaseUrl || getApiBaseUrl();
     this.nextBlinkTime = performance.now() + 2500 + Math.random() * 2000;
     this.nextSaccadeTime = performance.now() + 1800 + Math.random() * 1500;
   }

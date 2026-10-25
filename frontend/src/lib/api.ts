@@ -1,20 +1,28 @@
 import axios from "axios";
 
-const getApiBaseUrl = (): string => {
+export const getApiBaseUrl = (): string => {
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
   }
   if (typeof window !== "undefined") {
-    const { hostname, protocol } = window.location;
-    if (hostname !== "localhost" && hostname !== "127.0.0.1") {
-      // Connect to backend port 8000 on the same host when accessed over local network or tunnel
-      return `${protocol}//${hostname}:8000/api/v1`;
+    const { hostname } = window.location;
+    const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+    if (isLocalhost) {
+      return "http://localhost:8000/api/v1";
     }
+    // In production web client without NEXT_PUBLIC_API_URL, use relative /api/v1 rather than guessing port 8000
+    console.warn(
+      "[PrepX Warning] NEXT_PUBLIC_API_URL is not set. Falling back to relative '/api/v1'. Please configure NEXT_PUBLIC_API_URL in your production environment."
+    );
+    return "/api/v1";
+  }
+  if (process.env.NODE_ENV === "production") {
+    return "";
   }
   return "http://localhost:8000/api/v1";
 };
 
-const API_BASE_URL = getApiBaseUrl();
+export const API_BASE_URL = getApiBaseUrl();
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,

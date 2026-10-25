@@ -132,15 +132,27 @@ export default function GDSetupPage() {
           if (configuredPublicAppUrl && (fullUrl.includes("localhost") || fullUrl.includes("127.0.0.1"))) {
             const urlPath = fullUrl.replace(/^https?:\/\/[^/]+/, "");
             fullUrl = `${configuredPublicAppUrl}${urlPath}`;
+          } else if (
+            !configuredPublicAppUrl &&
+            typeof window !== "undefined" &&
+            !["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) &&
+            (fullUrl.includes("localhost") || fullUrl.includes("127.0.0.1"))
+          ) {
+            const urlPath = fullUrl.replace(/^https?:\/\/[^/]+/, "");
+            fullUrl = `${window.location.origin}${urlPath}`;
           }
         } else {
-          const baseOrigin = configuredPublicAppUrl || (typeof window !== "undefined" ? window.location.origin : "");
+          const baseOrigin =
+            configuredPublicAppUrl ||
+            (typeof window !== "undefined" ? window.location.origin : "");
           fullUrl = `${baseOrigin}${fullUrl.startsWith("/") ? "" : "/"}${fullUrl}`;
         }
         setInvitationUrl(fullUrl);
       } catch {
         // Fallback invitation URL using session code
-        const baseOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") || (typeof window !== "undefined" ? window.location.origin : "");
+        const baseOrigin =
+          process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
+          (typeof window !== "undefined" ? window.location.origin : "");
         setInvitationUrl(`${baseOrigin}/gd/join/${session.session_code}`);
       }
     } catch (err: unknown) {

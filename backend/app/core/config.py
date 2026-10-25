@@ -35,7 +35,10 @@ class Settings(BaseSettings):
     @property
     def sync_database_url(self) -> str:
         if self.DATABASE_URL:
-            return self.DATABASE_URL
+            url = self.DATABASE_URL
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql://", 1)
+            return url
         encoded_password = quote_plus(self.POSTGRES_PASSWORD) if self.POSTGRES_PASSWORD else ""
         return (
             f"postgresql://{self.POSTGRES_USER}:{encoded_password}@"

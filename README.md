@@ -265,8 +265,48 @@ pytest
 
 ---
 
+## 🌐 Cloud Deployment Architecture
+
+PrepX is designed for modern decoupled cloud deployment:
+
+### 1. Frontend (Vercel)
+* **Framework:** Next.js (App Router)
+* **Root Directory:** `frontend`
+* **Build Command:** `npm run build`
+* **Output Directory:** Next.js default (`.next`)
+* **Environment Variables in Vercel:**
+  * `NEXT_PUBLIC_API_URL`: `https://api.your-backend-domain.com/api/v1`
+  * `NEXT_PUBLIC_APP_URL`: `https://your-frontend-domain.vercel.app`
+  * `NEXT_PUBLIC_WS_URL`: `wss://api.your-backend-domain.com` *(optional; auto-derived from `NEXT_PUBLIC_API_URL`)*
+
+### 2. Backend (Render / Railway / Fly.io / Docker / VPS)
+* **Runtime:** Python 3.10+ (FastAPI + Uvicorn)
+* **Host Requirement:** Must be a **persistent service** that supports persistent WebSockets (for live Group Discussion rooms and audio streaming). *Do not deploy backend WebSocket endpoints to serverless functions with execution timeouts.*
+* **Production Start Command:**
+  ```bash
+  uvicorn app.main:app --host 0.0.0.0 --port $PORT
+  ```
+* **Database Migrations:** Run on deploy:
+  ```bash
+  alembic upgrade head
+  ```
+* **Key Backend Environment Variables:**
+  * `DATABASE_URL`: Managed PostgreSQL connection URI (`postgresql://...`). Automatically normalized if starting with `postgres://`.
+  * `CORS_ORIGINS`: Your production frontend origin (`https://your-frontend-domain.vercel.app`).
+  * `FRONTEND_URL`: Canonical frontend URL (`https://your-frontend-domain.vercel.app`) for generating invitations.
+  * `SECRET_KEY`: High-entropy random hex key (`python -c "import secrets; print(secrets.token_hex(32))"`).
+  * `LLM_PROVIDER`, `GEMINI_API_KEY`, `NVIDIA_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`: Server-side API credentials.
+
+### 3. Managed PostgreSQL (Supabase / Neon / Render / Railway)
+* Standard PostgreSQL 14+ instance.
+* Supply the pooled or direct connection string in `DATABASE_URL`.
+
+---
+
 ## 🔒 Security Best Practices
 
 - **Never commit `.env` or `.env.local` files**: All secret keys, tokens, and database passwords must stay out of version control.
+- **Client vs Server Secrets**: Database credentials, LLM keys, and JWT secrets are strictly backend-only. The frontend only receives `NEXT_PUBLIC_` URLs.
+- **CORS Specification**: Explicit origins are required; wildcard `*` with credentials enabled is strictly forbidden and rejected.
 - **Upload Directory**: Uploaded candidate resumes are stored locally in `uploads/` (or `backend/uploads/`) and are explicitly ignored by `.gitignore`.
 - **JWT Key Rotation**: In production, ensure `SECRET_KEY` is generated via a cryptographically secure pseudo-random number generator (`secrets.token_hex(32)`).
