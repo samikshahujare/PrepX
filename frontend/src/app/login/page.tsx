@@ -29,7 +29,7 @@ export default function LoginPage() {
       if (serverMsg) {
         setError(serverMsg);
       } else if (!err.response) {
-        setError("Unable to connect to the backend server. Please verify the backend API is running on port 8000.");
+        setError("Unable to connect to the backend server. Please verify your internet connection and that the backend API is active and reachable.");
       } else {
         setError("Invalid credentials. Please check your email and password.");
       }

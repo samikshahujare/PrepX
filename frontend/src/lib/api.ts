@@ -1,6 +1,18 @@
 import axios from "axios";
 
 export const getApiBaseUrl = (): string => {
+  // If running in the browser on localhost and pointing to a remote backend,
+  // use relative '/api/v1' so Next.js server proxies requests, bypassing browser CORS restrictions
+  // until the remote backend includes localhost:3000 in its CORS_ORIGINS.
+  if (typeof window !== "undefined") {
+    const { hostname } = window.location;
+    const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+    const envApiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (isLocalhost && envApiUrl && !envApiUrl.includes("localhost") && !envApiUrl.includes("127.0.0.1")) {
+      return "/api/v1";
+    }
+  }
+
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
   }

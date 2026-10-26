@@ -31,6 +31,11 @@ if settings.FRONTEND_URL:
     if clean_front and clean_front != "*" and clean_front not in cors_origins:
         cors_origins.append(clean_front)
 
+# Ensure local development origins are always permitted alongside production origins
+for dev_origin in ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8080"]:
+    if dev_origin not in cors_origins:
+        cors_origins.append(dev_origin)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
