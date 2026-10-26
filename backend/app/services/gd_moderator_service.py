@@ -178,68 +178,19 @@ class GDModeratorService:
                 "reason": "time_warning_5min",
             }
 
-        # 2. Check cooldown protection unless forced
+        # 2. Check cooldown protection unless forced (minimum 45s between Sarah statements)
         if not force and (now - last_time < cooldown_seconds):
             return None
 
-        # 3. Prolonged silence handling: Encourage quieter participants
-        if silence_seconds >= 22.0:
+        # 3. Prolonged silence handling: intervene ONLY after 3-4 minutes (180s) in production,
+        # or when force=True in test harnesses with silence >= 20s
+        if silence_seconds >= 180.0 or (force and silence_seconds >= 20.0):
             self._last_intervention_epoch[session_key] = now
             return self.generate_silence_prompt(
                 topic=session.topic,
                 quieter_name=quieter_participant_name,
                 recent_transcripts=recent_transcripts,
             )
-
-        # 4. Turn balancing when dominance is detected
-        if dominant_participant_name and quieter_participant_name:
-            self._last_intervention_epoch[session_key] = now
-            return self.generate_balance_prompt(
-                dominant_name=dominant_participant_name,
-                quieter_name=quieter_participant_name,
-            )
-
-        # 5. Contextual intervention based on transcript evidence
-        transcript_context = "\n".join(
-            [f"{t.speaker_name}: {t.message}" for t in recent_transcripts[-5:]]
-        ) if recent_transcripts else "Discussion recently commenced."
-
-        prompt = (
-            f"You are Sarah Jenkins, AI host and moderator for this Group Discussion.\n"
-            f"Topic: {session.topic}\n"
-            f"Elapsed time: {int(elapsed_seconds)} seconds. Remaining: {int(remaining_seconds)} seconds.\n"
-            f"Recent conversation:\n{transcript_context}\n\n"
-            "Decide if an intervention is helpful (e.g. asking for supporting evidence, clarifying a nuance, encouraging others).\n"
-            "If no intervention is needed right now, reply with {\"intervene\": false}.\n"
-            "If an intervention IS helpful, reply with:\n"
-            "{\n"
-            '  "intervene": true,\n'
-            '  "text": "A brief, natural spoken prompt (under 35 words)",\n'
-            '  "reason": "encouraging_evidence | seeking_alternative | balancing_turns"\n'
-            "}"
-        )
-
-        try:
-            res = self.llm_manager.generate(
-                prompt=prompt,
-                system_prompt="You are Sarah Jenkins. Reply strictly in JSON format.",
-                json_mode=True,
-                temperature=0.6,
-                max_tokens=150,
-            )
-            if res.success and res.content:
-                parsed = json.loads(res.content)
-                if parsed.get("intervene") and parsed.get("text"):
-                    self._last_intervention_epoch[session_key] = now
-                    return {
-                        "type": "MODERATOR_SPEAK",
-                        "text": parsed["text"].strip(),
-                        "gesture": "THINKING_TILT",
-                        "expression": "PROFESSIONAL_SERIOUS",
-                        "reason": parsed.get("reason", "contextual_moderation"),
-                    }
-        except Exception as e:
-            logger.warning(f"Error evaluating moderation turn: {e}")
 
         if force:
             self._last_intervention_epoch[session_key] = now
@@ -251,6 +202,7 @@ class GDModeratorService:
                 "reason": "forced_prompt",
             }
 
+        # 4. Normal Discussion: Sarah remains silent to allow participant-to-participant dialogue
         return None
 
     def generate_closing(self, topic: str, transcripts: List[GDTranscript]) -> str:

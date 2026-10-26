@@ -1,0 +1,279 @@
+diff --git a/.env.example b/.env.example
+index 6aab859..11c653c 100644
+--- a/.env.example
++++ b/.env.example
+@@ -26,12 +26,18 @@ POSTGRES_PORT=5432
+ POSTGRES_USER=postgres
+ POSTGRES_PASSWORD=your_postgres_password_here
+ POSTGRES_DB=prepx_db
+-# Optional full connection URL (overrides separate POSTGRES_* settings if set)
++# Optional full connection URL for managed PostgreSQL (Supabase, Neon, Render, Railway, AWS RDS)
+ # DATABASE_URL=postgresql://postgres:password@localhost:5432/prepx_db
+ 
+-# CORS Allowed Origins (Comma-separated)
++# CORS Allowed Origins (Comma-separated specific origins; never use wildcard '*' when credentials are enabled)
++# In production, include your production frontend origin (e.g. https://your-prepx-app.vercel.app)
+ CORS_ORIGINS="http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000"
+ 
++# Public Application URLs for multiplayer group discussion invitations and external access
++# In production, set to your canonical frontend URL (e.g. https://your-prepx-app.vercel.app)
++# APP_PUBLIC_URL=https://your-prepx-app.vercel.app
++# FRONTEND_URL=https://your-prepx-app.vercel.app
++
+ # Multi-LLM Provider Configuration (Automatic Failover: Gemini -> NVIDIA -> Groq -> OpenRouter)
+ # Provider 1: Google Gemini (Primary tier)
+ LLM_PROVIDER=gemini
+@@ -56,4 +62,16 @@ AVATAR_PROVIDER=local
+ # ------------------------------------------------------------------------------
+ # Frontend Configuration (frontend/.env.local)
+ # ------------------------------------------------------------------------------
++
++# FastApi Backend API Endpoint
++# In local development: http://localhost:8000/api/v1
++# In production: https://api.your-prepx-backend.com/api/v1
+ NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
++
++# Public Application URL (Used for generating externally shareable Group Discussion invitations)
++# In production, set to your canonical public frontend domain (e.g. on Vercel):
++# NEXT_PUBLIC_APP_URL=https://your-prepx-app.vercel.app
++
++# Optional dedicated WebSocket endpoint (if not specified, derived automatically from NEXT_PUBLIC_API_URL)
++# In production: wss://api.your-prepx-backend.com
++# NEXT_PUBLIC_WS_URL=wss://api.your-prepx-backend.com
+diff --git a/README.md b/README.md
+index e211457..e00d96c 100644
+--- a/README.md
++++ b/README.md
+@@ -265,8 +265,48 @@ pytest
+ 
+ ---
+ 
++## 🌐 Cloud Deployment Architecture
++
++PrepX is designed for modern decoupled cloud deployment:
++
++### 1. Frontend (Vercel)
++* **Framework:** Next.js (App Router)
++* **Root Directory:** `frontend`
++* **Build Command:** `npm run build`
++* **Output Directory:** Next.js default (`.next`)
++* **Environment Variables in Vercel:**
++  * `NEXT_PUBLIC_API_URL`: `https://api.your-backend-domain.com/api/v1`
++  * `NEXT_PUBLIC_APP_URL`: `https://your-frontend-domain.vercel.app`
++  * `NEXT_PUBLIC_WS_URL`: `wss://api.your-backend-domain.com` *(optional; auto-derived from `NEXT_PUBLIC_API_URL`)*
++
++### 2. Backend (Render / Railway / Fly.io / Docker / VPS)
++* **Runtime:** Python 3.10+ (FastAPI + Uvicorn)
++* **Host Requirement:** Must be a **persistent service** that supports persistent WebSockets (for live Group Discussion rooms and audio streaming). *Do not deploy backend WebSocket endpoints to serverless functions with execution timeouts.*
++* **Production Start Command:**
++  ```bash
++  uvicorn app.main:app --host 0.0.0.0 --port $PORT
++  ```
++* **Database Migrations:** Run on deploy:
++  ```bash
++  alembic upgrade head
++  ```
++* **Key Backend Environment Variables:**
++  * `DATABASE_URL`: Managed PostgreSQL connection URI (`postgresql://...`). Automatically normalized if starting with `postgres://`.
++  * `CORS_ORIGINS`: Your production frontend origin (`https://your-frontend-domain.vercel.app`).
++  * `FRONTEND_URL`: Canonical frontend URL (`https://your-frontend-domain.vercel.app`) for generating invitations.
++  * `SECRET_KEY`: High-entropy random hex key (`python -c "import secrets; print(secrets.token_hex(32))"`).
++  * `LLM_PROVIDER`, `GEMINI_API_KEY`, `NVIDIA_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`: Server-side API credentials.
++
++### 3. Managed PostgreSQL (Supabase / Neon / Render / Railway)
++* Standard PostgreSQL 14+ instance.
++* Supply the pooled or direct connection string in `DATABASE_URL`.
++
++---
++
+ ## 🔒 Security Best Practices
+ 
+ - **Never commit `.env` or `.env.local` files**: All secret keys, tokens, and database passwords must stay out of version control.
++- **Client vs Server Secrets**: Database credentials, LLM keys, and JWT secrets are strictly backend-only. The frontend only receives `NEXT_PUBLIC_` URLs.
++- **CORS Specification**: Explicit origins are required; wildcard `*` with credentials enabled is strictly forbidden and rejected.
+ - **Upload Directory**: Uploaded candidate resumes are stored locally in `uploads/` (or `backend/uploads/`) and are explicitly ignored by `.gitignore`.
+ - **JWT Key Rotation**: In production, ensure `SECRET_KEY` is generated via a cryptographically secure pseudo-random number generator (`secrets.token_hex(32)`).
+diff --git a/backend/.env.example b/backend/.env.example
+index fa37500..09ccc70 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -22,15 +22,17 @@ POSTGRES_PORT=5432
+ POSTGRES_USER=postgres
+ POSTGRES_PASSWORD=your_postgres_password_here
+ POSTGRES_DB=prepx_db
+-# Optional full connection URL (overrides separate POSTGRES_* settings if set)
++# Optional full connection URL for managed PostgreSQL (Supabase, Neon, Render, Railway, AWS RDS)
+ # DATABASE_URL=postgresql://postgres:password@localhost:5432/prepx_db
+ 
+-# CORS Allowed Origins (Comma-separated)
++# CORS Allowed Origins (Comma-separated specific origins; never use wildcard '*' when credentials are enabled)
++# In production, include your production frontend origin (e.g. https://your-prepx-app.vercel.app)
+ CORS_ORIGINS="http://localhost:3000,http://localhost:8080,http://127.0.0.1:3000"
+ 
+ # Public Application URLs for multiplayer group discussion invitations and external access
+-# APP_PUBLIC_URL=https://your-public-app.ngrok-free.app
+-# FRONTEND_URL=http://localhost:3000
++# In production, set to your canonical frontend URL (e.g. https://your-prepx-app.vercel.app)
++# APP_PUBLIC_URL=https://your-prepx-app.vercel.app
++# FRONTEND_URL=https://your-prepx-app.vercel.app
+ 
+ # Multi-LLM Provider Configuration (Failover: Gemini -> NVIDIA -> Groq -> OpenRouter)
+ # Provider 1: Google Gemini (Primary)
+diff --git a/backend/app/core/config.py b/backend/app/core/config.py
+index 3ec0074..b05005f 100644
+--- a/backend/app/core/config.py
++++ b/backend/app/core/config.py
+@@ -35,7 +35,10 @@ class Settings(BaseSettings):
+     @property
+     def sync_database_url(self) -> str:
+         if self.DATABASE_URL:
+-            return self.DATABASE_URL
++            url = self.DATABASE_URL
++            if url.startswith("postgres://"):
++                url = url.replace("postgres://", "postgresql://", 1)
++            return url
+         encoded_password = quote_plus(self.POSTGRES_PASSWORD) if self.POSTGRES_PASSWORD else ""
+         return (
+             f"postgresql://{self.POSTGRES_USER}:{encoded_password}@"
+diff --git a/backend/app/main.py b/backend/app/main.py
+index 62e6d23..848d522 100644
+--- a/backend/app/main.py
++++ b/backend/app/main.py
+@@ -20,14 +20,15 @@ app = FastAPI(
+ )
+ 
+ # Configure Cross-Origin Resource Sharing (CORS)
+-cors_origins = list(settings.CORS_ORIGINS)
++# Filter out wildcard '*' because allow_credentials=True requires specific origins per CORS specifications
++cors_origins = [orig for orig in settings.CORS_ORIGINS if orig.strip() and orig.strip() != "*"]
+ if settings.APP_PUBLIC_URL:
+     clean_pub = settings.APP_PUBLIC_URL.strip().rstrip("/")
+-    if clean_pub and clean_pub not in cors_origins:
++    if clean_pub and clean_pub != "*" and clean_pub not in cors_origins:
+         cors_origins.append(clean_pub)
+ if settings.FRONTEND_URL:
+     clean_front = settings.FRONTEND_URL.strip().rstrip("/")
+-    if clean_front and clean_front not in cors_origins:
++    if clean_front and clean_front != "*" and clean_front not in cors_origins:
+         cors_origins.append(clean_front)
+ 
+ app.add_middleware(
+diff --git a/frontend/.env.example b/frontend/.env.example
+index 1d6e2f3..8b649ff 100644
+--- a/frontend/.env.example
++++ b/frontend/.env.example
+@@ -4,11 +4,14 @@
+ # ==============================================================================
+ 
+ # FastApi Backend API Endpoint
++# In local development: http://localhost:8000/api/v1
++# In production: https://api.your-prepx-backend.com/api/v1
+ NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+ 
+ # Public Application URL (Used for generating externally shareable Group Discussion invitations)
+-# In development with ngrok/tunnel or in production, set to your canonical public domain:
+-# NEXT_PUBLIC_APP_URL=https://your-public-app.ngrok-free.app
++# In production, set to your canonical public frontend domain (e.g., on Vercel):
++# NEXT_PUBLIC_APP_URL=https://your-prepx-app.vercel.app
+ 
+ # Optional dedicated WebSocket endpoint (if not specified, derived automatically from NEXT_PUBLIC_API_URL)
+-# NEXT_PUBLIC_WS_URL=wss://your-public-api.ngrok-free.app
++# In production: wss://api.your-prepx-backend.com
++# NEXT_PUBLIC_WS_URL=wss://api.your-prepx-backend.com
+diff --git a/frontend/src/app/gd/setup/page.tsx b/frontend/src/app/gd/setup/page.tsx
+index 385d2f9..402d22c 100644
+--- a/frontend/src/app/gd/setup/page.tsx
++++ b/frontend/src/app/gd/setup/page.tsx
+@@ -132,15 +132,27 @@ export default function GDSetupPage() {
+           if (configuredPublicAppUrl && (fullUrl.includes("localhost") || fullUrl.includes("127.0.0.1"))) {
+             const urlPath = fullUrl.replace(/^https?:\/\/[^/]+/, "");
+             fullUrl = `${configuredPublicAppUrl}${urlPath}`;
++          } else if (
++            !configuredPublicAppUrl &&
++            typeof window !== "undefined" &&
++            !["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname) &&
++            (fullUrl.includes("localhost") || fullUrl.includes("127.0.0.1"))
++          ) {
++            const urlPath = fullUrl.replace(/^https?:\/\/[^/]+/, "");
++            fullUrl = `${window.location.origin}${urlPath}`;
+           }
+         } else {
+-          const baseOrigin = configuredPublicAppUrl || (typeof window !== "undefined" ? window.location.origin : "");
++          const baseOrigin =
++            configuredPublicAppUrl ||
++            (typeof window !== "undefined" ? window.location.origin : "");
+           fullUrl = `${baseOrigin}${fullUrl.startsWith("/") ? "" : "/"}${fullUrl}`;
+         }
+         setInvitationUrl(fullUrl);
+       } catch {
+         // Fallback invitation URL using session code
+-        const baseOrigin = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") || (typeof window !== "undefined" ? window.location.origin : "");
++        const baseOrigin =
++          process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, "") ||
++          (typeof window !== "undefined" ? window.location.origin : "");
+         setInvitationUrl(`${baseOrigin}/gd/join/${session.session_code}`);
+       }
+     } catch (err: unknown) {
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index ccc2f11..44c1aa5 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -1,20 +1,28 @@
+ import axios from "axios";
+ 
+-const getApiBaseUrl = (): string => {
++export const getApiBaseUrl = (): string => {
+   if (process.env.NEXT_PUBLIC_API_URL) {
+     return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
+   }
+   if (typeof window !== "undefined") {
+-    const { hostname, protocol } = window.location;
+-    if (hostname !== "localhost" && hostname !== "127.0.0.1") {
+-      // Connect to backend port 8000 on the same host when accessed over local network or tunnel
+-      return `${protocol}//${hostname}:8000/api/v1`;
++    const { hostname } = window.location;
++    const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
++    if (isLocalhost) {
++      return "http://localhost:8000/api/v1";
+     }
++    // In production web client without NEXT_PUBLIC_API_URL, use relative /api/v1 rather than guessing port 8000
++    console.warn(
++      "[PrepX Warning] NEXT_PUBLIC_API_URL is not set. Falling back to relative '/api/v1'. Please configure NEXT_PUBLIC_API_URL in your production environment."
++    );
++    return "/api/v1";
++  }
++  if (process.env.NODE_ENV === "production") {
++    return "";
+   }
+   return "http://localhost:8000/api/v1";
+ };
+ 
+-const API_BASE_URL = getApiBaseUrl();
++export const API_BASE_URL = getApiBaseUrl();
+ 
+ export const apiClient = axios.create({
+   baseURL: API_BASE_URL,
+diff --git a/frontend/src/lib/avatar/LocalSarah2DAvatarProvider.ts b/frontend/src/lib/avatar/LocalSarah2DAvatarProvider.ts
+index 6625054..a29a51d 100644
+--- a/frontend/src/lib/avatar/LocalSarah2DAvatarProvider.ts
++++ b/frontend/src/lib/avatar/LocalSarah2DAvatarProvider.ts
+@@ -20,6 +20,7 @@ import {
+   AvatarInitResult,
+   ExternalProviderConfig,
+ } from "./types";
++import { getApiBaseUrl } from "@/lib/api";
+ 
+ interface LandmarkCoords {
+   headCenter: { x: number; y: number };
+@@ -107,10 +108,7 @@ export class LocalSarah2DAvatarProvider implements IAvatarProvider {
+   private apiBaseUrl: string;
+ 
+   constructor(config?: ExternalProviderConfig) {
+-    this.apiBaseUrl =
+-      config?.apiBaseUrl ||
+-      process.env.NEXT_PUBLIC_API_URL ||
+-      "http://localhost:8000/api/v1";
++    this.apiBaseUrl = config?.apiBaseUrl || getApiBaseUrl();
+     this.nextBlinkTime = performance.now() + 2500 + Math.random() * 2000;
+     this.nextSaccadeTime = performance.now() + 1800 + Math.random() * 1500;
+   }

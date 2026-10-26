@@ -35,7 +35,11 @@ class GDEvaluatorService:
         session_id: uuid.UUID,
         participant_id: uuid.UUID,
     ) -> GDEvaluation:
-        """Generate individualized, evidence-grounded rubric evaluation for a specific participant."""
+        """
+        Generate an individualized, evidence-grounded evaluation report strictly from
+        the participant's own attributable speech turns. Never awards scores or strengths
+        without supporting transcript evidence.
+        """
         session = self.db.query(GDSession).filter(GDSession.id == session_id).first()
         if not session:
             raise NotFoundException("GD Session not found.")
@@ -48,7 +52,7 @@ class GDEvaluatorService:
         if not participant:
             raise NotFoundException("Participant not found in session.")
 
-        # Check if evaluation already exists (idempotency)
+        # Idempotency check: return existing evaluation if already generated
         existing_eval = (
             self.db.query(GDEvaluation)
             .filter(
@@ -60,7 +64,7 @@ class GDEvaluatorService:
         if existing_eval:
             return existing_eval
 
-        # Fetch transcripts
+        # Fetch only finalized transcripts for this session
         all_transcripts = (
             self.db.query(GDTranscript)
             .filter(GDTranscript.session_id == session_id)
@@ -68,72 +72,206 @@ class GDEvaluatorService:
             .all()
         )
 
-        user_utterances = [t for t in all_transcripts if t.participant_id == participant_id]
-        group_utterances = [t for t in all_transcripts if not t.is_moderator]
+        # STRICT ISOLATION: Filter transcripts belonging only to this participant
+        user_utterances = [
+            t for t in all_transcripts
+            if t.participant_id == participant_id and not t.is_moderator
+        ]
 
-        # Format prompt
-        user_quotes = "\n".join([f'[{t.timestamp_seconds}s] "{t.message}"' for t in user_utterances]) or "No spoken contributions recorded."
-        discussion_flow = "\n".join([f"{t.speaker_name}: {t.message}" for t in all_transcripts[-15:]])
+        total_words = sum(len(t.message.split()) for t in user_utterances)
+        speaking_turns = len(user_utterances)
+
+        # =========================================================================
+        # CASE 1: SILENT PARTICIPANT (No Attributable Speech Recorded)
+        # =========================================================================
+        if speaking_turns == 0:
+            logger.info(f"[GDEvaluator] Participant '{participant.display_name}' ({participant_id}) has 0 spoken turns. Generating silent scorecard.")
+            evaluation = GDEvaluation(
+                session_id=session_id,
+                participant_id=participant_id,
+                user_id=participant.user_id,
+                overall_score=1.0,
+                category_scores={cat: 1.0 for cat in RUBRIC_CATEGORIES},
+                strengths=[],  # Empty by design: no speech evidence to claim strengths
+                areas_for_improvement=[
+                    "No verbal contributions were recorded during this discussion session.",
+                    "To receive a measurable score in a Group Discussion, you must speak and present your perspective.",
+                    "Practice entering the discussion early: prepare your opening point during the first 1-2 minutes.",
+                    "If a microphone hardware issue or network permission error occurred, test your audio device before your next session.",
+                ],
+                communication_feedback="No recorded verbal contribution. Vocal clarity, tone, and articulation could not be evaluated without speech evidence.",
+                reasoning_feedback="No arguments or logical reasoning were recorded. Evaluation requires observable spoken propositions and rationale.",
+                listening_feedback="No verbal acknowledgment of peers or responses recorded. Active listening in GDs is demonstrated through direct verbal engagement.",
+                missed_opportunities=[
+                    "Missed the opportunity to initiate the discussion or provide an early perspective.",
+                    "Missed opportunities to agree, build upon, or politely challenge points raised by peers.",
+                ],
+                example_strong_response=(
+                    f"To begin contributing in your next GD on '{session.topic}', use this starter: "
+                    f"'I would like to open by proposing that {session.topic[:35]} has two critical dimensions: "
+                    f"practical implementation and long-term sustainability. For instance...'"
+                ),
+                personalized_plan={
+                    "speaking_turns": 0,
+                    "word_count": 0,
+                    "participation_status": "No recorded verbal contribution",
+                    "evidence_quality": "none",
+                    "drills": [
+                        "The 2-Minute Ingress Drill: Practice speaking a structured 30-second point in the first 2 minutes.",
+                        "PREP Method: State Point, Reason, Example, and Point restatement.",
+                        "Peer Paraphrasing: Practice starting with 'Building on [Name]'s point about...'",
+                    ],
+                    "recommended_topics": [
+                        session.topic,
+                        "How to Overcome Hesitation and Speak Up in Group Discussions",
+                    ],
+                    "assessment_limitations": "No attributable speech was recorded. If technical microphone or connection problems occurred, this report reflects technical absence rather than your true communication capability.",
+                },
+            )
+            self.db.add(evaluation)
+            self.db.commit()
+            self.db.refresh(evaluation)
+            return evaluation
+
+        # =========================================================================
+        # CASE 2: MINIMAL PARTICIPANT (1 Short Turn / < 15 Words)
+        # =========================================================================
+        if speaking_turns == 1 and total_words < 15:
+            logger.info(f"[GDEvaluator] Participant '{participant.display_name}' has minimal speech ({total_words} words). Generating minimal scorecard.")
+            user_quote = user_utterances[0].message
+            evaluation = GDEvaluation(
+                session_id=session_id,
+                participant_id=participant_id,
+                user_id=participant.user_id,
+                overall_score=2.0,
+                category_scores={
+                    "communication_clarity": 2.5,
+                    "relevance_to_topic": 2.5,
+                    "quality_of_reasoning": 2.0,
+                    "supporting_evidence": 1.5,
+                    "critical_thinking": 2.0,
+                    "listening_and_response": 1.5,
+                    "constructive_collaboration": 2.0,
+                    "respectful_disagreement": 1.5,
+                    "building_challenging_views": 1.5,
+                    "conciseness_organization": 2.5,
+                    "participation_balance": 1.5,
+                    "conclusion_summarization": 1.5,
+                },
+                strengths=[
+                    f"Made an initial contribution: \"{user_quote}\"",
+                ],
+                areas_for_improvement=[
+                    "Participation was minimal (only 1 brief contribution recorded).",
+                    "Support your points with practical reasons and real-world examples.",
+                    "Engage actively with other participants across multiple speaking turns.",
+                ],
+                communication_feedback=f"Delivered a brief contribution (\"{user_quote}\"). Vocal delivery was present, but too limited to assess sustained communication.",
+                reasoning_feedback="Your statement presented an initial thought, but lacked supporting premises or evidence.",
+                listening_feedback="Did not verbally respond to or build upon other participants' statements during the discussion.",
+                missed_opportunities=[
+                    "Did not follow up on your initial remark with supporting evidence or data points.",
+                    "Did not participate in mid-discussion debates or final summarization.",
+                ],
+                example_strong_response=(
+                    f"Expand your remark into a full argument: 'Regarding \"{user_quote}\", "
+                    "the primary reason is... For instance, in our recent coursework/industry, we observed that...'"
+                ),
+                personalized_plan={
+                    "speaking_turns": speaking_turns,
+                    "word_count": total_words,
+                    "participation_status": "Minimal contribution (1 turn)",
+                    "evidence_quality": "minimal",
+                    "drills": [
+                        "Point Elaboration: Turn a 1-sentence opinion into a 3-part argument with a concrete example.",
+                        "Turn-Taking Practice: Aim for 3-4 distinct contributions throughout a 15-minute GD.",
+                    ],
+                    "recommended_topics": [session.topic],
+                    "assessment_limitations": "Only one brief contribution was recorded. Several rubric categories could not be fully assessed due to limited evidence.",
+                },
+            )
+            self.db.add(evaluation)
+            self.db.commit()
+            self.db.refresh(evaluation)
+            return evaluation
+
+        # =========================================================================
+        # CASE 3: SUBSTANTIVE PARTICIPANT (2+ Turns, Rich Evidence)
+        # =========================================================================
+        user_quotes_formatted = "\n".join(
+            [f'Turn {i+1} [{t.timestamp_seconds}s]: "{t.message}"' for i, t in enumerate(user_utterances)]
+        )
 
         prompt = (
-            f"You are Sarah Jenkins, master recruiter and GD evaluator.\n"
-            f"Evaluate candidate '{participant.display_name}' for the Group Discussion on:\n"
+            f"You are Sarah Jenkins, a professional GD evaluator.\n"
             f"Topic: {session.topic}\n"
-            f"Candidate Attributed Utterances ({len(user_utterances)} turns):\n{user_quotes}\n\n"
-            f"General Discussion Context:\n{discussion_flow}\n\n"
-            "Score the candidate on a 1.0 to 5.0 scale across these exact 12 categories:\n"
-            "communication_clarity, relevance_to_topic, quality_of_reasoning, supporting_evidence, "
-            "critical_thinking, listening_and_response, constructive_collaboration, respectful_disagreement, "
-            "building_challenging_views, conciseness_organization, participation_balance, conclusion_summarization.\n\n"
-            "Return strictly a JSON object with this format:\n"
+            f"Candidate: {participant.display_name}\n"
+            f"Recorded Attributable Candidate Turns ({speaking_turns} turns, {total_words} words):\n"
+            f"{user_quotes_formatted}\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Evaluate this candidate STRICTLY based on their actual spoken quotes above.\n"
+            "2. Score each category on a 1.0 to 5.0 scale.\n"
+            "3. Ground all strengths and feedback in their actual words.\n"
+            "4. Return strictly valid JSON in this exact structure:\n"
             "{\n"
-            '  "overall_score": 4.1,\n'
+            '  "overall_score": 3.7,\n'
             '  "category_scores": {\n'
-            '    "communication_clarity": 4.2,\n'
-            '    "relevance_to_topic": 4.5,\n'
-            '    "quality_of_reasoning": 4.0,\n'
-            '    "supporting_evidence": 3.8,\n'
-            '    "critical_thinking": 4.0,\n'
-            '    "listening_and_response": 4.3,\n'
-            '    "constructive_collaboration": 4.1,\n'
-            '    "respectful_disagreement": 4.2,\n'
-            '    "building_challenging_views": 4.0,\n'
-            '    "conciseness_organization": 4.0,\n'
-            '    "participation_balance": 3.9,\n'
-            '    "conclusion_summarization": 3.8\n'
+            '    "communication_clarity": 3.8,\n'
+            '    "relevance_to_topic": 4.0,\n'
+            '    "quality_of_reasoning": 3.6,\n'
+            '    "supporting_evidence": 3.4,\n'
+            '    "critical_thinking": 3.7,\n'
+            '    "listening_and_response": 3.5,\n'
+            '    "constructive_collaboration": 3.8,\n'
+            '    "respectful_disagreement": 3.5,\n'
+            '    "building_challenging_views": 3.6,\n'
+            '    "conciseness_organization": 3.8,\n'
+            '    "participation_balance": 3.5,\n'
+            '    "conclusion_summarization": 3.2\n'
             "  },\n"
-            '  "strengths": ["Clear opening thesis", "Built constructively on peer point"],\n'
-            '  "areas_for_improvement": ["Could bring in quantitative metrics", "Avoid trailing off in conclusion"],\n'
-            '  "communication_feedback": "Articulate delivery with steady vocal projection.",\n'
-            '  "reasoning_feedback": "Sound logical progression with valid deductions.",\n'
-            '  "listening_feedback": "Actively referred to peer remarks by name.",\n'
-            '  "missed_opportunities": ["Could have synthesized opposing viewpoints before the final minute."],\n'
-            '  "example_strong_response": "For example: while velocity is critical, automated regression tests preserve long-term velocity.",\n'
-            '  "personalized_plan": {"focus_areas": ["Active Listening", "Evidence Framing"], "recommended_topics": ["Ethical AI Governance", "Monolith vs Microservices"]}\n'
+            '  "strengths": ["Clear articulation of...", "Grounded argument in..."],\n'
+            '  "areas_for_improvement": ["Could cite quantitative data", "Elaborate counter-arguments"],\n'
+            '  "communication_feedback": "Specific feedback on clarity and delivery.",\n'
+            '  "reasoning_feedback": "Specific feedback on logic and arguments.",\n'
+            '  "listening_feedback": "Specific feedback on responsiveness to peers.",\n'
+            '  "missed_opportunities": ["Missed opportunity to summarize."],\n'
+            '  "example_strong_response": "An example of a higher-impact response based on their points.",\n'
+            '  "personalized_plan": {\n'
+            '    "drills": ["Drill 1", "Drill 2"],\n'
+            '    "recommended_topics": ["Topic 1"]\n'
+            "  }\n"
             "}"
         )
 
-        overall_score = 3.8
-        category_scores: Dict[str, float] = {cat: 3.8 for cat in RUBRIC_CATEGORIES}
-        strengths = ["Contributed relevant arguments to the discussion flow", "Exhibited polite turn-taking"]
-        areas_for_improvement = ["Cite concrete industry evidence or data points", "Synthesize group consensus earlier"]
-        comm_fb = f"{participant.display_name} communicated with reasonable clarity and composure."
-        reason_fb = "Arguments followed a coherent line of reasoning."
-        listen_fb = "Acknowledged fellow participants' contributions during speaking turns."
-        missed_opps = ["Opportunity to present a counter-intuitive industry case study."]
-        example_resp = f"A high-impact contribution would be: 'Building on {session.topic[:30]}, we should assess both immediate delivery and long-term maintainability.'"
-        personalized_plan = {
-            "drills": ["Active Listening & Paraphrasing", "Structure: Point-Reason-Example-Point (PREP)"],
-            "recommended_topics": ["AI Safety & Governance", "Remote Team Leadership"],
+        # Baseline substantive defaults derived directly from evidence metrics
+        calc_overall = min(4.5, max(2.5, 2.5 + (speaking_turns * 0.3) + min(1.0, total_words / 150.0)))
+        overall_score = round(calc_overall, 1)
+        category_scores: Dict[str, float] = {cat: overall_score for cat in RUBRIC_CATEGORIES}
+        strengths = [
+            f"Participated actively with {speaking_turns} speaking turns across the discussion.",
+            f"Communicated key points relevant to the topic of {session.topic[:35]}.",
+        ]
+        areas_for_improvement = [
+            "Support arguments with concrete industry case studies or quantitative metrics.",
+            "Synthesize opposing viewpoints to help lead the group toward consensus.",
+        ]
+        comm_fb = f"{participant.display_name} spoke across {speaking_turns} turns with clear expression."
+        reason_fb = "Presented relevant points that contributed to the group discussion flow."
+        listen_fb = "Engaged in conversation turns during the session."
+        missed_opps = ["Opportunity to present a counter-intuitive case study or summarize group consensus."]
+        example_resp = f"A higher-impact point: 'To build on our analysis of {session.topic[:30]}, we should weigh both the short-term ROI and operational maintenance costs.'"
+        personalized_plan_obj = {
+            "drills": ["Data-Backed Argumentation", "Consensus Building & Synthesis"],
+            "recommended_topics": [session.topic],
         }
 
         try:
             res = self.llm_manager.generate(
                 prompt=prompt,
-                system_prompt="You are Sarah Jenkins, technical evaluator. Return strictly valid JSON.",
+                system_prompt="You are Sarah Jenkins, professional GD evaluator. Return strictly valid JSON.",
                 json_mode=True,
-                temperature=0.4,
-                max_tokens=800,
+                temperature=0.3,
+                max_tokens=850,
             )
             if res.success and res.content:
                 parsed = json.loads(res.content)
@@ -143,35 +281,31 @@ class GDEvaluatorService:
                     for cat in RUBRIC_CATEGORIES:
                         if cat in parsed_cat:
                             category_scores[cat] = round(float(parsed_cat[cat]), 1)
-                    strengths = parsed.get("strengths", strengths)
-                    areas_for_improvement = parsed.get("areas_for_improvement", areas_for_improvement)
+                    if parsed.get("strengths"):
+                        strengths = parsed["strengths"]
+                    if parsed.get("areas_for_improvement"):
+                        areas_for_improvement = parsed["areas_for_improvement"]
                     comm_fb = parsed.get("communication_feedback", comm_fb)
                     reason_fb = parsed.get("reasoning_feedback", reason_fb)
                     listen_fb = parsed.get("listening_feedback", listen_fb)
-                    missed_opps = parsed.get("missed_opportunities", missed_opps)
+                    if parsed.get("missed_opportunities"):
+                        missed_opps = parsed["missed_opportunities"]
                     example_resp = parsed.get("example_strong_response", example_resp)
-                    personalized_plan = parsed.get("personalized_plan", personalized_plan)
+                    if parsed.get("personalized_plan"):
+                        personalized_plan_obj = parsed["personalized_plan"]
         except Exception as e:
             logger.warning(f"Error during LLM evaluation generation: {e}")
 
-        # If user spoke very little, honestly reflect limited evidence
-        if len(user_utterances) == 0:
-            overall_score = 1.5
-            category_scores = {cat: 1.5 for cat in RUBRIC_CATEGORIES}
-            strengths = ["Attended the scheduled group discussion arena."]
-            areas_for_improvement = [
-                "Insufficient evidence: No attributable speech turns were recorded during this session.",
-                "Active participation and contributing supporting evidence are critical for GD evaluation.",
-            ]
-            comm_fb = "Insufficient evidence: No spoken contributions were detected for this participant."
-            reason_fb = "Insufficient evidence to evaluate logical progression or structure."
-            listen_fb = "Session presence recorded, but no verbal engagement or synthesis observed."
-            missed_opps = ["Missed opportunity to contribute initial viewpoints or respond to peer arguments."]
-            example_resp = f"An opening contribution to start participating would be: 'I would like to initiate by addressing {session.topic[:35]} from the standpoint of practical feasibility.'"
-            personalized_plan = {
-                "drills": ["Voice Projection & Confidence", "Turn-taking & Point-Reason-Example"],
-                "recommended_topics": ["Collaborative Problem Solving", session.topic],
-            }
+        # Assemble personalized plan with verified evidence metadata
+        final_plan = {
+            "speaking_turns": speaking_turns,
+            "word_count": total_words,
+            "participation_status": "Substantive contributor",
+            "evidence_quality": "substantive",
+            "drills": personalized_plan_obj.get("drills", ["Active Listening", "PREP Method"]),
+            "recommended_topics": personalized_plan_obj.get("recommended_topics", [session.topic]),
+            "assessment_limitations": "Evaluation grounded in candidate's attributable spoken turns during this session.",
+        }
 
         evaluation = GDEvaluation(
             session_id=session_id,
@@ -186,7 +320,7 @@ class GDEvaluatorService:
             listening_feedback=listen_fb,
             missed_opportunities=missed_opps,
             example_strong_response=example_resp,
-            personalized_plan=personalized_plan,
+            personalized_plan=final_plan,
         )
         self.db.add(evaluation)
         self.db.commit()
@@ -199,7 +333,7 @@ class GDEvaluatorService:
         user_id: Optional[uuid.UUID] = None,
         participant_id: Optional[uuid.UUID] = None,
     ) -> GDEvaluation:
-        """Fetch evaluation ensuring participant authorization."""
+        """Fetch evaluation ensuring participant authorization and session boundary."""
         query = self.db.query(GDEvaluation).filter(GDEvaluation.session_id == session_id)
         if participant_id:
             eval_report = query.filter(GDEvaluation.participant_id == participant_id).first()
@@ -209,7 +343,6 @@ class GDEvaluatorService:
             raise ValidationException("Must specify user or participant identifier.")
 
         if not eval_report:
-            # Auto-generate evaluation on demand if missing
             if participant_id:
                 return self.evaluate_participant(session_id, participant_id)
             elif user_id:

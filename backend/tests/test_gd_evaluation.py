@@ -91,3 +91,78 @@ def test_individualized_gd_evaluation(db_session, client, auth_headers):
     report = res.json()["data"]
     assert report["participant_id"] == str(participant_a.id)
     assert report["overall_score"] == eval_a.overall_score
+
+
+def test_silent_participant_evaluation(db_session):
+    user = User(email="silent_user@prepx.ai", password_hash="fakehash", is_active=True)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    gd_service = GDService(db_session)
+    session = gd_service.create_session(
+        creator_id=user.id,
+        data=GDSessionCreate(
+            topic="Should artificial intelligence be regulated globally?",
+            topic_category="Technology & AI",
+            duration_minutes=10,
+            max_participants=4,
+        ),
+        host_name="Silent Sam",
+    )
+    participant = session.participants[0]
+
+    # No transcripts added for this participant (completely silent)
+    eval_service = GDEvaluatorService(db_session)
+    eval_report = eval_service.evaluate_participant(
+        session_id=session.id,
+        participant_id=participant.id,
+    )
+
+    # Must be 1.0, strengths must be empty, and plan must state no speech
+    assert eval_report.overall_score == 1.0
+    assert len(eval_report.strengths) == 0
+    assert eval_report.personalized_plan["speaking_turns"] == 0
+    assert eval_report.personalized_plan["participation_status"] == "No recorded verbal contribution"
+    assert "No recorded verbal contribution" in eval_report.communication_feedback
+
+
+def test_minimal_participant_evaluation(db_session):
+    user = User(email="minimal_user@prepx.ai", password_hash="fakehash", is_active=True)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    gd_service = GDService(db_session)
+    session = gd_service.create_session(
+        creator_id=user.id,
+        data=GDSessionCreate(
+            topic="Remote work vs in-office collaboration",
+            topic_category="Management",
+            duration_minutes=10,
+            max_participants=4,
+        ),
+        host_name="Minimal Mary",
+    )
+    participant = session.participants[0]
+
+    # Exactly 1 short utterance
+    mod_svc = GDModeratorService(db_session)
+    mod_svc.record_transcript(
+        session_id=session.id,
+        participant_id=participant.id,
+        speaker_name="Minimal Mary",
+        message="I prefer remote work.",
+        timestamp_seconds=15.0,
+    )
+
+    eval_service = GDEvaluatorService(db_session)
+    eval_report = eval_service.evaluate_participant(
+        session_id=session.id,
+        participant_id=participant.id,
+    )
+
+    assert eval_report.overall_score == 2.0
+    assert eval_report.personalized_plan["speaking_turns"] == 1
+    assert len(eval_report.strengths) == 1
+    assert "I prefer remote work." in eval_report.strengths[0]

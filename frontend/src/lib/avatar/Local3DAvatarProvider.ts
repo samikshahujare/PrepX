@@ -9,6 +9,7 @@ import {
   AvatarInitResult,
 } from "./types";
 import { VisemeEngine } from "./VisemeEngine";
+import { getApiBaseUrl } from "@/lib/api";
 
 interface SarahSkeleton {
   head: THREE.Bone | null;
@@ -113,19 +114,11 @@ export class Local3DAvatarProvider implements IAvatarProvider {
   private visemeIntensity: number = 0;
   private candidateAudioLevel: number = 0;
   private currentAudioEnergy: number = 0;
+  private lipSyncTuningMode: "tuned" | "exaggerated" = "tuned";
 
   // Edge TTS Audio & Analyser
   private getApiBaseUrl(): string {
-    if (process.env.NEXT_PUBLIC_API_URL) {
-      return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
-    }
-    if (typeof window !== "undefined") {
-      const { hostname, protocol } = window.location;
-      if (hostname !== "localhost" && hostname !== "127.0.0.1") {
-        return `${protocol}//${hostname}:8000/api/v1`;
-      }
-    }
-    return "http://localhost:8000/api/v1";
+    return getApiBaseUrl();
   }
   private audioCtx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -161,8 +154,13 @@ export class Local3DAvatarProvider implements IAvatarProvider {
           isSpeaking: this.isSpeakingActive,
           gesture: this.gestureType,
           viseme: this.currentViseme,
+          tuningMode: this.lipSyncTuningMode,
           isReady: this.isInitialized && this.sarahModel !== null,
         }),
+        setTuningMode: (mode: "tuned" | "exaggerated") => this.setLipSyncTuningMode(mode),
+        getTuningMode: () => this.getLipSyncTuningMode(),
+        getDiagnostics: () => this.getLipSyncDiagnostics(),
+        getActiveMorphs: () => Object.fromEntries(this.activeMorphValues),
       };
     }
   }
@@ -804,6 +802,30 @@ export class Local3DAvatarProvider implements IAvatarProvider {
     this.visemeIntensity = intensity;
   }
 
+  public setLipSyncTuningMode(mode: "tuned" | "exaggerated"): void {
+    this.lipSyncTuningMode = mode;
+  }
+
+  public getLipSyncTuningMode(): "tuned" | "exaggerated" {
+    return this.lipSyncTuningMode;
+  }
+
+  public getLipSyncDiagnostics() {
+    return {
+      isSpeakingActive: this.isSpeakingActive,
+      currentViseme: this.currentViseme,
+      visemeIntensity: this.visemeIntensity,
+      audioEnergy: this.currentAudioEnergy,
+      tuningMode: this.lipSyncTuningMode,
+      jawOpen: this.activeMorphValues.get("jawOpen") || 0,
+      sil_00: this.activeMorphValues.get("sil_00") || 0,
+      p_b_m_21: this.activeMorphValues.get("p_b_m_21") || 0,
+      aa_02: this.activeMorphValues.get("aa_02") || 0,
+      ow_08: this.activeMorphValues.get("ow_08") || 0,
+      w_uw_07: this.activeMorphValues.get("w_uw_07") || 0,
+    };
+  }
+
   public onCandidateAudioLevel(level: number): void {
     this.candidateAudioLevel = level;
     if (this.currentState === "LISTENING" && level > 25 && !this.isNodding) {
@@ -1314,7 +1336,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       "mouthRollUpper",
     ];
 
-    // Absolute Audio Rule: If not speaking, strictly neutral mouth
+    // Absolute Audio Rule: If not speaking, strictly neutral resting mouth
     if (!this.isSpeakingActive) {
       for (const key of visemeKeys) {
         this.setTargetMorph(key, key === "sil_00" ? 1.0 : 0.0);
@@ -1322,7 +1344,7 @@ export class Local3DAvatarProvider implements IAvatarProvider {
       return;
     }
 
-    // Measure real-time audio energy
+    // 1. Real-time audio energy measurement with noise floor gating
     let audioEnergy = 0;
     if (this.analyser) {
       this.analyser.getByteFrequencyData(this.audioFrequencyData as any);
@@ -1331,132 +1353,239 @@ export class Local3DAvatarProvider implements IAvatarProvider {
         sum += this.audioFrequencyData[i];
       }
       const avg = sum / this.audioFrequencyData.length;
-      audioEnergy = Math.min(1.8, (avg / 44) * 1.5);
+      // Background noise gate: treat digital floor (< 6) as silence
+      if (avg < 6.0) {
+        audioEnergy = 0.0;
+      } else {
+        // Map normal speech frequency amplitude gracefully into [0.45, 1.0]
+        audioEnergy = Math.min(1.0, 0.40 + (avg / 55.0) * 0.60);
+      }
     } else {
-      audioEnergy = 0.8 + Math.sin(this.clock.getElapsedTime() * 11) * 0.4;
+      // Speech synthesis fallback: Gentle natural voice cadence (no wild oscillations)
+      const speechClock = this.clock.getElapsedTime();
+      audioEnergy = 0.72 + Math.sin(speechClock * 7.5) * 0.08;
     }
 
+    // Asymmetric audio energy envelope: attacks quickly, releases smoothly
+    const attackRate = audioEnergy > this.currentAudioEnergy ? 16.0 : 10.0;
     this.currentAudioEnergy +=
-      (audioEnergy - this.currentAudioEnergy) * Math.min(1, delta * 15.0);
+      (audioEnergy - this.currentAudioEnergy) * Math.min(1.0, delta * attackRate);
 
+    // 2. Fetch interpolated viseme state from VisemeEngine
     const { intensity, viseme } = this.visemeEngine.update(delta);
-    const speechClock = this.clock.getElapsedTime();
-    const rhythmWave = Math.sin(speechClock * 13.0) * 0.5 + 0.5;
-    const audioDrive = Math.max(0.35, Math.min(1.5, this.currentAudioEnergy));
-    const effectiveIntensity = Math.min(
-      1.0,
-      Math.max(0.40, intensity) * audioDrive
-    );
+    const hasAudio = this.currentAudioEnergy > 0.05;
+    const isSil = viseme === "sil";
 
+    // 3. Mode Selection: Tuned Subtle Realistic vs Exaggerated (for dev A/B comparison)
+    if (this.lipSyncTuningMode === "exaggerated") {
+      const audioDrive = Math.max(0.35, Math.min(1.5, this.currentAudioEnergy));
+      const effectiveIntensity = Math.min(1.0, Math.max(0.40, intensity) * audioDrive);
+
+      for (const key of visemeKeys) {
+        this.setTargetMorph(key, 0);
+      }
+
+      if (effectiveIntensity > 0.05 && viseme !== "sil") {
+        switch (viseme) {
+          case "aa":
+            this.setTargetMorph("aa_02", 0.85 * effectiveIntensity);
+            this.setTargetMorph("aa_ah_ax_01", 0.65 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.65 * effectiveIntensity);
+            this.setTargetMorph("mouthLowerDownLeft", 0.40 * effectiveIntensity);
+            this.setTargetMorph("mouthLowerDownRight", 0.40 * effectiveIntensity);
+            this.setTargetMorph("mouthUpperUpLeft", 0.25 * effectiveIntensity);
+            this.setTargetMorph("mouthUpperUpRight", 0.25 * effectiveIntensity);
+            break;
+          case "oh":
+            this.setTargetMorph("ow_08", 0.80 * effectiveIntensity);
+            this.setTargetMorph("ao_03", 0.70 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.50 * effectiveIntensity);
+            this.setTargetMorph("mouthFunnel", 0.60 * effectiveIntensity);
+            break;
+          case "ou":
+            this.setTargetMorph("w_uw_07", 0.90 * effectiveIntensity);
+            this.setTargetMorph("mouthPucker", 0.55 * effectiveIntensity);
+            this.setTargetMorph("mouthFunnel", 0.45 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
+            break;
+          case "ee":
+            this.setTargetMorph("y_iy_ih_ix_06", 0.85 * effectiveIntensity);
+            this.setTargetMorph("mouthStretchLeft", 0.45 * effectiveIntensity);
+            this.setTargetMorph("mouthStretchRight", 0.45 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.28 * effectiveIntensity);
+            break;
+          case "ih":
+            this.setTargetMorph("ey_eh_uh_04", 0.75 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
+            break;
+          case "mbp":
+            this.setTargetMorph("p_b_m_21", 0.95 * effectiveIntensity);
+            this.setTargetMorph("mouthClose", 0.85 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.02);
+            break;
+          case "fv":
+            this.setTargetMorph("f_v_18", 0.85 * effectiveIntensity);
+            this.setTargetMorph("mouthRollLower", 0.30 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.18 * effectiveIntensity);
+            break;
+          default:
+            this.setTargetMorph("aa_02", 0.45 * effectiveIntensity);
+            this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
+            break;
+        }
+      } else {
+        this.setTargetMorph("sil_00", 1.0);
+      }
+      return;
+    }
+
+    // --- TUNED REALISTIC, SUBTLE FACIAL LIP-SYNC ---
     for (const key of visemeKeys) {
       this.setTargetMorph(key, 0);
     }
 
-    if (effectiveIntensity > 0.05 && viseme !== "sil") {
-      switch (viseme) {
-        case "aa":
-          this.setTargetMorph("aa_02", 0.85 * effectiveIntensity);
-          this.setTargetMorph("aa_ah_ax_01", 0.65 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.65 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownLeft", 0.40 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownRight", 0.40 * effectiveIntensity);
-          this.setTargetMorph("mouthUpperUpLeft", 0.25 * effectiveIntensity);
-          this.setTargetMorph("mouthUpperUpRight", 0.25 * effectiveIntensity);
-          break;
-        case "oh":
-          this.setTargetMorph("ow_08", 0.80 * effectiveIntensity);
-          this.setTargetMorph("ao_03", 0.70 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.50 * effectiveIntensity);
-          this.setTargetMorph("mouthFunnel", 0.60 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownLeft", 0.25 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownRight", 0.25 * effectiveIntensity);
-          break;
-        case "ou":
-          this.setTargetMorph("w_uw_07", 0.90 * effectiveIntensity);
-          this.setTargetMorph("mouthPucker", 0.55 * effectiveIntensity);
-          this.setTargetMorph("mouthFunnel", 0.45 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
-          break;
-        case "ee":
-          this.setTargetMorph("y_iy_ih_ix_06", 0.85 * effectiveIntensity);
-          this.setTargetMorph("mouthStretchLeft", 0.45 * effectiveIntensity);
-          this.setTargetMorph("mouthStretchRight", 0.45 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownLeft", 0.15 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownRight", 0.15 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.28 * effectiveIntensity);
-          break;
-        case "ih":
-          this.setTargetMorph("ey_eh_uh_04", 0.75 * effectiveIntensity);
-          this.setTargetMorph("y_iy_ih_ix_06", 0.50 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownLeft", 0.20 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownRight", 0.20 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
-          break;
-        case "mbp":
-          this.setTargetMorph("p_b_m_21", 0.95 * effectiveIntensity);
-          this.setTargetMorph("mouthClose", 0.85 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.02);
-          break;
-        case "fv":
-          this.setTargetMorph("f_v_18", 0.85 * effectiveIntensity);
-          this.setTargetMorph("mouthRollLower", 0.30 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.18 * effectiveIntensity);
-          break;
-        case "th":
-          this.setTargetMorph("th_dh_17", 0.85 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownLeft", 0.15 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownRight", 0.15 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.25 * effectiveIntensity);
-          break;
-        case "sz":
-          this.setTargetMorph("s_z_15", 0.80 * effectiveIntensity);
-          this.setTargetMorph("mouthStretchLeft", 0.25 * effectiveIntensity);
-          this.setTargetMorph("mouthStretchRight", 0.25 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.16 * effectiveIntensity);
-          break;
-        case "sh":
-          this.setTargetMorph("sh_ch_jh_zh_16", 0.85 * effectiveIntensity);
-          this.setTargetMorph("mouthPucker", 0.25 * effectiveIntensity);
-          this.setTargetMorph("mouthFunnel", 0.25 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.22 * effectiveIntensity);
-          break;
-        case "kg":
-          this.setTargetMorph("k_g_ng_20", 0.80 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownLeft", 0.20 * effectiveIntensity);
-          this.setTargetMorph("mouthLowerDownRight", 0.20 * effectiveIntensity);
-          this.setTargetMorph("jawOpen", 0.35 * effectiveIntensity);
-          break;
-        default:
-          if (this.currentAudioEnergy > 0.08) {
-            const fallbackJaw = Math.min(0.60, this.currentAudioEnergy * 0.50 * (0.55 + rhythmWave * 0.45));
-            this.setTargetMorph("jawOpen", fallbackJaw);
-            this.setTargetMorph("mouthLowerDownLeft", fallbackJaw * 0.45);
-            this.setTargetMorph("mouthLowerDownRight", fallbackJaw * 0.45);
-            this.setTargetMorph("mouthUpperUpLeft", fallbackJaw * 0.25);
-            this.setTargetMorph("mouthUpperUpRight", fallbackJaw * 0.25);
-            this.setTargetMorph("aa_02", fallbackJaw * 0.40);
-          } else {
-            this.setTargetMorph("sil_00", 1.0);
-          }
-          break;
-      }
-    } else if (this.isSpeakingActive && this.currentAudioEnergy > 0.08) {
-      // Audio-driven articulation during speech when viseme queue has gap or ended
-      const fallbackJaw = Math.min(0.58, this.currentAudioEnergy * 0.48 * (0.55 + rhythmWave * 0.45));
-      this.setTargetMorph("jawOpen", fallbackJaw);
-      this.setTargetMorph("mouthLowerDownLeft", fallbackJaw * 0.40);
-      this.setTargetMorph("mouthLowerDownRight", fallbackJaw * 0.40);
-      this.setTargetMorph("mouthUpperUpLeft", fallbackJaw * 0.20);
-      this.setTargetMorph("mouthUpperUpRight", fallbackJaw * 0.20);
-      this.setTargetMorph("aa_02", fallbackJaw * 0.35);
-    } else {
+    // If silence, pauses between sentences, or audio below threshold, smoothly close to resting neutral
+    if (isSil || !hasAudio || intensity <= 0.01) {
       this.setTargetMorph("sil_00", 1.0);
+      return;
+    }
+
+    // Effective intensity calculated with safe, natural ceilings (no artificial 0.40 floor!)
+    const audioDrive = Math.max(0.55, Math.min(1.0, this.currentAudioEnergy));
+    const effectiveIntensity = Math.min(0.70, intensity * audioDrive);
+
+    switch (viseme) {
+      case "aa":
+        // Natural open vowel (/ɑ/ as in father, car, job)
+        // aa_02 provides calibrated vowel shape; subtle jawOpen adds controlled opening
+        this.setTargetMorph("aa_02", 0.36 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.15 * effectiveIntensity);
+        this.setTargetMorph("mouthLowerDownLeft", 0.05 * effectiveIntensity);
+        this.setTargetMorph("mouthLowerDownRight", 0.05 * effectiveIntensity);
+        break;
+
+      case "oh":
+        // Mid-back rounded vowel (/oʊ/, /ɔ/ as in go, open, role)
+        // Clean rounding without excessive trumpet cone funneling
+        this.setTargetMorph("ow_08", 0.38 * effectiveIntensity);
+        this.setTargetMorph("mouthFunnel", 0.15 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.10 * effectiveIntensity);
+        this.setTargetMorph("mouthLowerDownLeft", 0.03 * effectiveIntensity);
+        this.setTargetMorph("mouthLowerDownRight", 0.03 * effectiveIntensity);
+        break;
+
+      case "ou":
+        // Close rounded vowel (/u/, /w/ as in you, who, world)
+        // Subtle forward purse without ballooning or distorted lips
+        this.setTargetMorph("w_uw_07", 0.40 * effectiveIntensity);
+        this.setTargetMorph("mouthPucker", 0.15 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.06 * effectiveIntensity);
+        break;
+
+      case "ee":
+        // Front close spread vowel (/i/, /j/ as in we, see, meet)
+        // Subtle lateral widening with minimal jaw drop
+        this.setTargetMorph("y_iy_ih_ix_06", 0.34 * effectiveIntensity);
+        this.setTargetMorph("mouthStretchLeft", 0.10 * effectiveIntensity);
+        this.setTargetMorph("mouthStretchRight", 0.10 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.05 * effectiveIntensity);
+        break;
+
+      case "ih":
+        // Mid-front lax vowel (/eɪ/, /ɛ/, /ɪ/ as in get, it, system)
+        this.setTargetMorph("ey_eh_uh_04", 0.30 * effectiveIntensity);
+        this.setTargetMorph("mouthLowerDownLeft", 0.04 * effectiveIntensity);
+        this.setTargetMorph("mouthLowerDownRight", 0.04 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.08 * effectiveIntensity);
+        break;
+
+      case "mbp":
+        // Bilabial consonants (M, B, P: lips fully meet with 0 jaw opening)
+        this.setTargetMorph("p_b_m_21", 0.65 * effectiveIntensity);
+        this.setTargetMorph("mouthClose", 0.35 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.0);
+        break;
+
+      case "fv":
+        // Labiodental consonants (F, V: lower lip touches upper incisors)
+        this.setTargetMorph("f_v_18", 0.45 * effectiveIntensity);
+        this.setTargetMorph("mouthRollLower", 0.12 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.04 * effectiveIntensity);
+        break;
+
+      case "th":
+        // Dental (TH: tongue between teeth, teeth slightly apart)
+        this.setTargetMorph("th_dh_17", 0.42 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.05 * effectiveIntensity);
+        break;
+
+      case "sz":
+        // Sibilants (S, Z: teeth together, slight lateral stretch)
+        this.setTargetMorph("s_z_15", 0.38 * effectiveIntensity);
+        this.setTargetMorph("mouthStretchLeft", 0.06 * effectiveIntensity);
+        this.setTargetMorph("mouthStretchRight", 0.06 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.03 * effectiveIntensity);
+        break;
+
+      case "sh":
+        // Affricates (SH, CH, J: slight pucker and forward funnel)
+        this.setTargetMorph("sh_ch_jh_zh_16", 0.40 * effectiveIntensity);
+        this.setTargetMorph("mouthFunnel", 0.08 * effectiveIntensity);
+        this.setTargetMorph("mouthPucker", 0.08 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.05 * effectiveIntensity);
+        break;
+
+      case "kg":
+        // Velars (K, G, NG: back of tongue elevation, modest jaw)
+        this.setTargetMorph("k_g_ng_20", 0.35 * effectiveIntensity);
+        this.setTargetMorph("jawOpen", 0.06 * effectiveIntensity);
+        break;
+
+      default:
+        // Soft conversational fallback driven by vocal amplitude
+        if (hasAudio) {
+          const fallbackJaw = Math.min(0.12, this.currentAudioEnergy * 0.12);
+          this.setTargetMorph("jawOpen", fallbackJaw);
+          this.setTargetMorph("aa_02", fallbackJaw * 1.2);
+          this.setTargetMorph("mouthLowerDownLeft", fallbackJaw * 0.25);
+          this.setTargetMorph("mouthLowerDownRight", fallbackJaw * 0.25);
+        } else {
+          this.setTargetMorph("sil_00", 1.0);
+        }
+        break;
+    }
+
+    // 4. COORDINATED MASTER SAFETY CLAMP (The Anatomical Budget)
+    // Enforces strict physiological limits across all active speech blendshapes:
+    const currentJaw = this.targetMorphValues.get("jawOpen") || 0;
+    if (currentJaw > 0.18) {
+      this.targetMorphValues.set("jawOpen", 0.18);
+    }
+
+    const maxLower = 0.08;
+    const lowerL = this.targetMorphValues.get("mouthLowerDownLeft") || 0;
+    const lowerR = this.targetMorphValues.get("mouthLowerDownRight") || 0;
+    if (lowerL > maxLower) this.targetMorphValues.set("mouthLowerDownLeft", maxLower);
+    if (lowerR > maxLower) this.targetMorphValues.set("mouthLowerDownRight", maxLower);
+
+    const maxUpper = 0.05;
+    const upperL = this.targetMorphValues.get("mouthUpperUpLeft") || 0;
+    const upperR = this.targetMorphValues.get("mouthUpperUpRight") || 0;
+    if (upperL > maxUpper) this.targetMorphValues.set("mouthUpperUpLeft", maxUpper);
+    if (upperR > maxUpper) this.targetMorphValues.set("mouthUpperUpRight", maxUpper);
+
+    // Prevent antagonistic collision: If bilabial closure is active, force jaw completely shut
+    const closeIntent =
+      (this.targetMorphValues.get("p_b_m_21") || 0) +
+      (this.targetMorphValues.get("mouthClose") || 0);
+    if (closeIntent > 0.15) {
+      this.targetMorphValues.set("jawOpen", 0.0);
     }
   }
 
   private updateFacialExpressions() {
-    // When actively speaking, attenuate smile weight to 0.30 so the smile adds warmth without locking mouth closed
-    const weight = this.isSpeakingActive ? this.expressionWeight * 0.30 : this.expressionWeight;
+    // When actively speaking, attenuate smile weight to 0.18 so the smile adds warmth without fighting speech shapes
+    const weight = this.isSpeakingActive ? this.expressionWeight * 0.18 : this.expressionWeight;
 
     const exprKeys = [
       "mouthSmileLeft",
@@ -1578,14 +1707,25 @@ export class Local3DAvatarProvider implements IAvatarProvider {
   private flushMorphTargets(delta: number) {
     if (this.morphMeshes.length === 0 && !this.morphMesh) return;
 
-    const lerpSpeed = 22.0;
-
     this.targetMorphValues.forEach((targetVal, name) => {
       if (this.morphDictionary[name] === undefined) return;
 
       const currentVal = this.activeMorphValues.get(name) || 0;
-      const nextVal = currentVal + (targetVal - currentVal) * Math.min(1.0, delta * lerpSpeed);
 
+      // Realistic flesh dynamics with asymmetric attack & release:
+      let speed = 16.0;
+      if (name === "jawOpen" && targetVal < currentVal) {
+        // Fast jaw closing prevents jaw hanging open during bilabials M/B/P
+        speed = 22.0;
+      } else if (targetVal < currentVal) {
+        // Natural gentle decay for speech shapes
+        speed = 14.0;
+      } else if (name === "p_b_m_21" || name === "mouthClose") {
+        // Crisp lip closure
+        speed = 18.0;
+      }
+
+      const nextVal = currentVal + (targetVal - currentVal) * Math.min(1.0, delta * speed);
       this.activeMorphValues.set(name, nextVal);
 
       // Synchronously flush the calculated morph influence to ALL bound SkinnedMesh primitives

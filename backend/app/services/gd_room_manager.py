@@ -97,9 +97,9 @@ class GDRoom:
         self._speaker_decay_tasks[participant_id] = asyncio.create_task(_decay())
 
     def record_transcript_chunk(self, participant_id: Optional[str], message: str, is_moderator: bool):
-        """Update room silence timer and participant turn metrics."""
-        self.last_speech_epoch = time.time()
+        """Update room silence timer and participant turn metrics. Ignores moderator speech."""
         if not is_moderator:
+            self.last_speech_epoch = time.time()
             self.silence_prompts_count = 0
             if participant_id and participant_id in self.participation:
                 self.participation[participant_id]["turn_count"] += 1
@@ -355,8 +355,12 @@ class GDRoomManager:
                         quieter_part = room.get_quieter_participant()
                         dominant_part = room.get_dominant_participant()
 
-                        # Avoid repeating silence prompt more than twice consecutively
-                        effective_silence = silence_duration if room.silence_prompts_count < 2 else 0.0
+                        # Intervene only after 3 minutes (180s) for prompt 1, and +60s for prompt 2. Max 2 prompts.
+                        effective_silence = 0.0
+                        if room.silence_prompts_count == 0 and silence_duration >= 180.0:
+                            effective_silence = silence_duration
+                        elif room.silence_prompts_count == 1 and (now - room.last_intervention_epoch >= 60.0):
+                            effective_silence = 180.0  # triggers the follow-up prompt
 
                         mod_svc = GDModeratorService(db)
                         intervention = mod_svc.evaluate_moderation_turn(
@@ -375,7 +379,7 @@ class GDRoomManager:
                                 room.silence_prompts_count += 1
 
                             room.last_intervention_epoch = now
-                            room.last_speech_epoch = now
+                            # Note: do not set room.last_speech_epoch = now; Sarah's speech is ignored for participant silence calculation
                             # Estimate Sarah speech duration (approx 200 words/min = 3.3 words/sec + 1.5s padding)
                             words = len(intervention["text"].split())
                             est_dur = max(3.5, (words / 3.0) + 1.5)

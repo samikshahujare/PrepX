@@ -18,7 +18,9 @@ import {
   VideoOff,
   MicOff,
   Radio,
+  Sliders,
 } from "lucide-react";
+import LipSyncTestPanel from "./LipSyncTestPanel";
 
 interface AvatarStageProps {
   sessionId?: string;
@@ -84,6 +86,7 @@ export default function AvatarStage({
   const [selectedDurationMinutes, setSelectedDurationMinutes] = useState<number>(durationMinutes || 30);
   const [remainingSeconds, setRemainingSeconds] = useState<number>((durationMinutes || 30) * 60);
   const [isTimerDropdownOpen, setIsTimerDropdownOpen] = useState(false);
+  const [isLipSyncTestOpen, setIsLipSyncTestOpen] = useState(false);
 
   // Synchronize duration if session duration changes
   useEffect(() => {
@@ -414,8 +417,19 @@ export default function AvatarStage({
             </div>
           </div>
 
-          {/* Right: Dynamic Semantic State Pill */}
+          {/* Right: Dynamic Semantic State Pill & Dev-Only Lip-Sync Test Trigger */}
           <div className="flex items-center gap-2">
+            {process.env.NODE_ENV !== "production" && (
+              <button
+                onClick={() => setIsLipSyncTestOpen(!isLipSyncTestOpen)}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-900/60 hover:bg-indigo-800/80 border border-indigo-500/40 text-indigo-300 text-xs font-semibold backdrop-blur-md transition-all shadow-md hover:scale-105 active:scale-95"
+                title="Open Lip-Sync Tester & Live Telemetry"
+              >
+                <Sliders className="h-3.5 w-3.5 text-indigo-400" />
+                <span className="hidden sm:inline">Lip-Sync Test</span>
+              </button>
+            )}
+
             <div
               className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border text-xs font-semibold backdrop-blur-md shadow-lg transition-all duration-300 ${badge.classes}`}
             >
@@ -425,6 +439,15 @@ export default function AvatarStage({
           </div>
         </div>
       </div>
+
+      {/* Dev-Only Lip-Sync Tuning & Test Suite Modal */}
+      {process.env.NODE_ENV !== "production" && (
+        <LipSyncTestPanel
+          engine={engineRef.current}
+          isOpen={isLipSyncTestOpen}
+          onClose={() => setIsLipSyncTestOpen(false)}
+        />
+      )}
 
       {/* 3. Center/Middle: Candidate Camera Inset (Picture-in-Picture) */}
       {showCandidateInset && candidateStream && (

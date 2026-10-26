@@ -323,6 +323,19 @@ export class AvatarEngine {
     }
   }
 
+  public setLipSyncTuningMode(mode: "tuned" | "exaggerated"): void {
+    if (this.activeProvider && typeof (this.activeProvider as any).setLipSyncTuningMode === "function") {
+      (this.activeProvider as any).setLipSyncTuningMode(mode);
+    }
+  }
+
+  public getLipSyncDiagnostics(): any {
+    if (this.activeProvider && typeof (this.activeProvider as any).getLipSyncDiagnostics === "function") {
+      return (this.activeProvider as any).getLipSyncDiagnostics();
+    }
+    return null;
+  }
+
   public resize(width: number, height: number): void {
     if (this.activeProvider) {
       this.activeProvider.resize(width, height);

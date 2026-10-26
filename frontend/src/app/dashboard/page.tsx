@@ -2,35 +2,32 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { authService } from "@/lib/auth";
 import { interviewService } from "@/lib/interview";
 import { gdService } from "@/lib/gd";
-import { User, Resume, InterviewSession, GDSession } from "@/types";
+import { User, InterviewSession, GDSession } from "@/types";
 import FeedbackReportModal from "@/components/interview/FeedbackReportModal";
 import {
-  BrainCircuit,
   Bot,
   Users,
-  Briefcase,
   CheckCircle2,
   Clock,
   Sparkles,
   User as UserIcon,
   Save,
   Loader2,
-  Upload,
-  FileText,
-  Tag,
   ArrowRight,
   Award,
-  Layers,
-  Radio,
   PlusCircle,
-  Link as LinkIcon,
   ShieldCheck,
+  ChevronRight,
+  Calendar,
+  X,
   Compass,
+  ArrowUpRight,
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -48,14 +45,15 @@ export default function DashboardPage() {
   const [bio, setBio] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
-  // Data Collections
-  const [resumes, setResumes] = useState<Resume[]>([]);
+  // Data Collections for Recent Practice
   const [sessionsList, setSessionsList] = useState<InterviewSession[]>([]);
   const [gdSessions, setGdSessions] = useState<GDSession[]>([]);
-  const [loadingGd, setLoadingGd] = useState<boolean>(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
-  // Tab State: "overview" | "interviews" | "gd" | "resumes"
-  const [activeTab, setActiveTab] = useState<"overview" | "interviews" | "gd" | "resumes">("overview");
+  // All History Modal State
+  const [isAllHistoryOpen, setIsAllHistoryOpen] = useState(false);
+  const [historyTab, setHistoryTab] = useState<"all" | "interviews" | "gd">("all");
 
   // Feedback Modal State for Personal Interviews
   const [selectedFeedbackReport, setSelectedFeedbackReport] = useState<any>(null);
@@ -81,15 +79,7 @@ export default function DashboardPage() {
         setExperienceLevel(userData.profile?.experience_level || "Fresher / Entry Level");
         setBio(userData.profile?.bio || "");
 
-        // Load existing resumes
-        try {
-          const resumeList = await interviewService.listResumes();
-          setResumes(resumeList);
-        } catch (e) {
-          console.warn("Could not load resumes:", e);
-        }
-
-        // Load personal interview sessions
+        // Load recent interview sessions
         try {
           const sessions = await interviewService.listInterviewSessions();
           setSessionsList(sessions);
@@ -97,46 +87,33 @@ export default function DashboardPage() {
           console.warn("Could not load interview sessions:", e);
         }
 
-        // Load GD sessions
+        // Load recent GD sessions
         try {
-          setLoadingGd(true);
-          const list = await gdService.listSessions();
-          setGdSessions(list);
+          const gdList = await gdService.listSessions();
+          setGdSessions(gdList);
         } catch (e) {
           console.warn("Could not load GD sessions:", e);
-        } finally {
-          setLoadingGd(false);
         }
-      } catch (err) {
-        authService.clearTokens();
-        router.push("/login");
+      } catch (err: any) {
+        console.error("Dashboard initialization error:", err);
+        setHistoryError("Could not load recent practice data.");
       } finally {
         setLoading(false);
+        setLoadingHistory(false);
       }
     }
-
     init();
   }, [router]);
 
-  // Handle viewing personal interview feedback report
-  const handleViewSessionFeedback = async (session: InterviewSession) => {
-    setIsFeedbackModalOpen(true);
+  // Handler to view personal interview feedback report modal
+  const handleViewInterviewReport = async (session: InterviewSession) => {
     setIsLoadingFeedback(true);
+    setIsFeedbackModalOpen(true);
     try {
-      if (session.feedback && (session.feedback as any).overall_score) {
-        setSelectedFeedbackReport(session.feedback as any);
-      } else {
-        const report = await interviewService.getSessionFeedback(session.id);
-        setSelectedFeedbackReport(report);
-      }
-    } catch (err) {
-      console.warn("Attempting fresh feedback generation for session:", err);
-      try {
-        const report = await interviewService.generateSessionFeedback(session.id);
-        setSelectedFeedbackReport(report);
-      } catch (e) {
-        console.error("Failed to load feedback report:", e);
-      }
+      const report = await interviewService.generateSessionFeedback(session.id);
+      setSelectedFeedbackReport(report);
+    } catch (e) {
+      console.error("Failed to load feedback report:", e);
     } finally {
       setIsLoadingFeedback(false);
     }
@@ -169,7 +146,7 @@ export default function DashboardPage() {
     setQuickJoinError(null);
     const trimmed = quickJoinInput.trim();
     if (!trimmed) {
-      setQuickJoinError("Please enter a valid session code (e.g. PREPX-GD-12345) or invitation link.");
+      setQuickJoinError("Enter a session code (e.g. PREPX-GD-12345) or invitation link.");
       return;
     }
 
@@ -189,11 +166,56 @@ export default function DashboardPage() {
     router.push(`/gd/room/${trimmed}`);
   };
 
+  // Format combined recent practice sessions (up to 3 items)
+  interface UnifiedPracticeItem {
+    id: string;
+    type: "interview" | "gd";
+    title: string;
+    subtitle: string;
+    date: string;
+    rawDate: number;
+    status: string;
+    score?: number;
+    sessionRef: any;
+  }
+
+  const unifiedRecentPractice: UnifiedPracticeItem[] = [
+    ...sessionsList.map((s) => ({
+      id: s.id,
+      type: "interview" as const,
+      title: s.target_role || "Technical & Behavioral Interview",
+      subtitle: s.company ? `Target: ${s.company}` : "Personal AI Simulation",
+      date: new Date(s.created_at).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      }),
+      rawDate: new Date(s.created_at).getTime(),
+      status: s.status,
+      score: (s.feedback as any)?.overall_score,
+      sessionRef: s,
+    })),
+    ...gdSessions.map((g) => ({
+      id: g.id,
+      type: "gd" as const,
+      title: g.topic || "Group Discussion Arena",
+      subtitle: `Code: ${g.session_code} • ${g.duration_minutes}m`,
+      date: new Date(g.created_at).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      }),
+      rawDate: new Date(g.created_at).getTime(),
+      status: g.status,
+      sessionRef: g,
+    })),
+  ].sort((a, b) => b.rawDate - a.rawDate);
+
+  const displayRecentPractice = unifiedRecentPractice.slice(0, 3);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#0a0d14] flex flex-col items-center justify-center text-white">
-        <Loader2 className="h-8 w-8 text-indigo-500 animate-spin mb-2" />
-        <p className="text-xs text-slate-400">Loading PrepX Workspace...</p>
+        <Loader2 className="h-8 w-8 text-indigo-500 animate-spin mb-3" />
+        <p className="text-sm text-slate-400">Loading your PrepX Arena...</p>
       </div>
     );
   }
@@ -202,9 +224,9 @@ export default function DashboardPage() {
     <div className="min-h-screen flex flex-col bg-[#0a0d14] text-slate-100">
       <Navbar />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10">
-        {/* Welcome Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-6 mb-8">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+        {/* Modern AI SaaS Hero Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 sm:mb-10">
           <div>
             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
@@ -212,32 +234,40 @@ export default function DashboardPage() {
               </h1>
               <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 text-xs font-semibold flex items-center gap-1.5">
                 <Sparkles className="h-3 w-3" />
-                Select Practice Arena
+                Select Practice Mode
               </span>
             </div>
             <p className="text-sm text-slate-400">
-              Select your practice mode below to launch an AI simulation with Sarah Jenkins.
+              Choose your practice simulation format below to start training with Sarah Jenkins.
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2.5 self-start sm:self-auto">
             <button
               onClick={() => setIsEditingProfile(!isEditingProfile)}
-              className="px-3.5 py-2 rounded-xl text-xs font-semibold glass-panel text-slate-200 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-2"
+              className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-900/80 border border-white/10 text-slate-200 hover:text-white hover:bg-slate-800 transition-colors flex items-center gap-2"
             >
               <UserIcon className="h-3.5 w-3.5 text-indigo-400" />
-              {isEditingProfile ? "Close Profile" : "Candidate Profile"}
+              <span>{isEditingProfile ? "Close Profile" : "Candidate Profile"}</span>
             </button>
           </div>
         </div>
 
-        {/* Profile Settings Drawer (If editing) */}
+        {/* Candidate Profile Drawer (If opened) */}
         {isEditingProfile && (
-          <div className="glass-panel p-6 rounded-2xl border border-indigo-500/30 mb-8 shadow-xl">
-            <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-indigo-400" />
-              Candidate Profile Information
-            </h3>
+          <div className="bg-[#111726]/90 border border-indigo-500/30 rounded-2xl p-6 mb-8 shadow-2xl backdrop-blur-xl animate-in fade-in duration-200">
+            <div className="flex items-center justify-between mb-4 border-b border-white/10 pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-indigo-400" />
+                Candidate Profile Settings
+              </h3>
+              <button
+                onClick={() => setIsEditingProfile(false)}
+                className="text-slate-400 hover:text-white text-xs"
+              >
+                Cancel
+              </button>
+            </div>
             <form onSubmit={handleUpdateProfile} className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Full Name</label>
@@ -275,12 +305,12 @@ export default function DashboardPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Bio / Interview Goals</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Interview Goal</label>
                 <input
                   type="text"
                   value={bio}
                   onChange={(e) => setBio(e.target.value)}
-                  placeholder="e.g. Preparing for product company interviews"
+                  placeholder="e.g. Preparing for tech company interviews"
                   className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-white/10 text-white text-sm focus:outline-none focus:border-indigo-500"
                 />
               </div>
@@ -289,7 +319,7 @@ export default function DashboardPage() {
                 <button
                   type="submit"
                   disabled={isSaving}
-                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 flex items-center gap-2"
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md shadow-indigo-600/30 flex items-center gap-2 transition"
                 >
                   {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                   Save Profile
@@ -300,141 +330,149 @@ export default function DashboardPage() {
         )}
 
         {/* ------------------------------------------------------------- */}
-        {/* PHASE 1: THE TWO PRIMARY POST-LOGIN OPTIONS                  */}
+        {/* CORE SECTION: TWO EQUALLY PROMINENT PRIMARY CHOICES           */}
         {/* ------------------------------------------------------------- */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
-          {/* OPTION A: PERSONAL INTERVIEW */}
-          <div className="glass-panel p-6 sm:p-8 rounded-3xl border border-indigo-500/30 bg-gradient-to-b from-indigo-950/40 via-slate-900/60 to-slate-950/80 shadow-2xl flex flex-col justify-between relative overflow-hidden group hover:border-indigo-500/50 transition-all">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8 mb-12">
+          {/* CARD 1: PERSONAL INTERVIEW */}
+          <div className="rounded-3xl border border-indigo-500/30 bg-gradient-to-b from-indigo-950/30 via-slate-900/70 to-[#0c101a] p-6 sm:p-8 flex flex-col justify-between shadow-2xl relative overflow-hidden group hover:border-indigo-500/50 transition-all duration-300">
             <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none group-hover:bg-indigo-600/20 transition-all" />
 
             <div>
+              {/* Header Bar */}
               <div className="flex items-center justify-between mb-5">
-                <div className="h-12 w-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shadow-lg shadow-indigo-500/20">
-                  <Bot className="h-6 w-6" />
+                <div className="flex items-center gap-2.5">
+                  <div className="h-10 w-10 rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 shadow-md shadow-indigo-500/20">
+                    <Bot className="h-5 w-5" />
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold uppercase tracking-wider">
+                    1-on-1 Simulation
+                  </span>
                 </div>
-                <span className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs font-bold uppercase tracking-wider">
-                  Option A
-                </span>
+
+                {/* Sarah Jenkins Avatar Badge */}
+                <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-900/90 border border-slate-800 text-[11px] text-slate-300">
+                  <div className="h-5 w-5 rounded-full overflow-hidden bg-indigo-950 border border-indigo-500/40 relative">
+                    <Image
+                      src="/avatars/sarah-clean.png"
+                      alt="Sarah Jenkins"
+                      width={20}
+                      height={20}
+                      className="object-cover"
+                    />
+                  </div>
+                  <span className="font-semibold text-slate-200">Sarah Jenkins</span>
+                </div>
               </div>
 
-              <h2 className="text-2xl font-extrabold text-white tracking-tight mb-2">
-                Personal AI Interview
+              {/* Title & Concise Description */}
+              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight mb-2">
+                Personal Interview
               </h2>
-              <p className="text-sm font-medium text-indigo-300 mb-3">
-                1-on-1 Simulation with Sarah Jenkins
-              </p>
-              <p className="text-xs sm:text-sm text-slate-400 leading-relaxed mb-6">
-                Upload your resume and optional job description inside this workflow. Sarah conducts realistic conversational interviews with real-time voice, 3D lip-sync, adaptive follow-ups, and a 9-dimensional evidence scorecard.
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mb-6">
+                Practice realistic 1-on-1 technical and behavioral interviews tailored to your resume and target role, featuring interactive voice, 3D facial animation, and a comprehensive evaluation scorecard.
               </p>
 
-              <div className="space-y-2.5 mb-8 border-t border-white/10 pt-4">
+              {/* Modern Feature Chips */}
+              <div className="space-y-2.5 mb-8 border-t border-white/10 pt-5">
                 <div className="flex items-center gap-2.5 text-xs text-slate-300">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>Resume & Job Description tailored questions</span>
+                  <span>Resume & job description tailored questions</span>
                 </div>
                 <div className="flex items-center gap-2.5 text-xs text-slate-300">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>Interactive 3D Sarah Jenkins avatar with neural voice</span>
+                  <span>Interactive 3D Sarah avatar with synchronized voice</span>
                 </div>
                 <div className="flex items-center gap-2.5 text-xs text-slate-300">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>Role-specific & company-specific simulation modes</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-xs text-slate-300">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>Granular grammar, technical accuracy & articulation rubric</span>
+                  <span>Granular 9-dimension scoring and transcript analysis</span>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-3 pt-2">
+            {/* Clear Primary CTA */}
+            <div className="pt-2">
               <button
                 onClick={() => router.push("/interview/setup")}
                 className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-bold text-sm shadow-xl shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
               >
-                <span>Launch Personal Interview</span>
+                <span>Start Interview</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
-
-              {sessionsList.length > 0 && (
-                <button
-                  onClick={() => setActiveTab("interviews")}
-                  className="w-full py-2.5 px-4 rounded-xl glass-panel text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Award className="h-3.5 w-3.5 text-indigo-400" />
-                  <span>View Past Interview Reports ({sessionsList.length})</span>
-                </button>
-              )}
             </div>
           </div>
 
-          {/* OPTION B: GROUP DISCUSSION (GD ARENA) */}
-          <div className="glass-panel p-6 sm:p-8 rounded-3xl border border-purple-500/30 bg-gradient-to-b from-purple-950/40 via-slate-900/60 to-slate-950/80 shadow-2xl flex flex-col justify-between relative overflow-hidden group hover:border-purple-500/50 transition-all">
+          {/* CARD 2: GROUP DISCUSSION ARENA */}
+          <div className="rounded-3xl border border-purple-500/30 bg-gradient-to-b from-purple-950/30 via-slate-900/70 to-[#0c101a] p-6 sm:p-8 flex flex-col justify-between shadow-2xl relative overflow-hidden group hover:border-purple-500/50 transition-all duration-300">
             <div className="absolute top-0 right-0 w-64 h-64 bg-purple-600/10 rounded-full blur-3xl pointer-events-none group-hover:bg-purple-600/20 transition-all" />
 
             <div>
+              {/* Header Bar */}
               <div className="flex items-center justify-between mb-5">
-                <div className="h-12 w-12 rounded-2xl bg-purple-600/20 border border-purple-500/40 flex items-center justify-center text-purple-400 shadow-lg shadow-purple-500/20">
-                  <Users className="h-6 w-6" />
+                <div className="flex items-center gap-2.5">
+                  <div className="h-10 w-10 rounded-2xl bg-purple-600/20 border border-purple-500/40 flex items-center justify-center text-purple-400 shadow-md shadow-purple-500/20">
+                    <Users className="h-5 w-5" />
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-bold uppercase tracking-wider">
+                    Multiplayer Arena
+                  </span>
                 </div>
-                <span className="px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs font-bold uppercase tracking-wider">
-                  Option B
-                </span>
+
+                {/* Moderator Badge */}
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/90 border border-slate-800 text-[11px] text-purple-300 font-semibold">
+                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                  <span>AI Moderator</span>
+                </div>
               </div>
 
-              <h2 className="text-2xl font-extrabold text-white tracking-tight mb-2">
-                Group Discussion Arena
+              {/* Title & Concise Description */}
+              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight mb-2">
+                GD Arena
               </h2>
-              <p className="text-sm font-medium text-purple-300 mb-3">
-                Live Multiplayer Moderated by Sarah (AI)
-              </p>
-              <p className="text-xs sm:text-sm text-slate-400 leading-relaxed mb-6">
-                No resume or JD required. Create or join discussion rooms with friends from any browser or device. Sarah Jenkins serves as the neutral AI moderator: opening the debate, keeping order, managing time warnings, and delivering individual evidence-grounded scorecards.
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed mb-6">
+                Practice group discussions with peers and Sarah Jenkins as your AI moderator. Discuss trending topics in real time, take turns speaking, and receive individualized, evidence-grounded performance feedback.
               </p>
 
-              <div className="space-y-2.5 mb-8 border-t border-white/10 pt-4">
+              {/* Modern Feature Chips */}
+              <div className="space-y-2.5 mb-8 border-t border-white/10 pt-5">
                 <div className="flex items-center gap-2.5 text-xs text-slate-300">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>Instant public invitation links — friends join without installing app</span>
+                  <span>Autonomous AI moderation with silence intervention</span>
                 </div>
                 <div className="flex items-center gap-2.5 text-xs text-slate-300">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>Reliable Web Audio PCM mesh streaming with no local echo</span>
+                  <span>Instant shareable invitation links for group practice</span>
                 </div>
                 <div className="flex items-center gap-2.5 text-xs text-slate-300">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>Real-time speaker-attributed transcripts with Sarah-speech filtering</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-xs text-slate-300">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-                  <span>12-rubric individual evaluation based on actual spoken contribution</span>
+                  <span>Separate scorecards based strictly on your own speech</span>
                 </div>
               </div>
             </div>
 
+            {/* Clear Primary CTA & Compact Quick Join */}
             <div className="space-y-3 pt-2">
               <button
                 onClick={() => router.push("/gd/setup")}
                 className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm shadow-xl shadow-purple-600/30 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
               >
-                <PlusCircle className="h-4 w-4" />
-                <span>Create Group Discussion</span>
+                <span>Enter GD Arena</span>
+                <ArrowRight className="h-4 w-4" />
               </button>
 
-              {/* Quick Join Inline Form */}
-              <form onSubmit={handleQuickJoin} className="flex items-center gap-2">
+              {/* Inline Quick Join for Existing Session */}
+              <form onSubmit={handleQuickJoin} className="flex items-center gap-2 pt-1">
                 <input
                   type="text"
                   value={quickJoinInput}
                   onChange={(e) => setQuickJoinInput(e.target.value)}
-                  placeholder="Paste PREPX-GD-XXXXX or Invite Link..."
+                  placeholder="Enter session code (e.g. PREPX-GD-XXXXX)..."
                   className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white text-xs placeholder-slate-500 focus:outline-none focus:border-purple-500"
                 />
                 <button
                   type="submit"
-                  className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs shadow-md shadow-purple-600/30 shrink-0 transition-all"
+                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-semibold text-xs border border-white/10 shrink-0 transition"
                 >
-                  Join Room
+                  Join
                 </button>
               </form>
 
@@ -443,321 +481,248 @@ export default function DashboardPage() {
                   {quickJoinError}
                 </p>
               )}
-
-              {gdSessions.length > 0 && (
-                <button
-                  onClick={() => setActiveTab("gd")}
-                  className="w-full py-2.5 px-4 rounded-xl glass-panel text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/5 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Users className="h-3.5 w-3.5 text-purple-400" />
-                  <span>View Your GD Sessions ({gdSessions.length})</span>
-                </button>
-              )}
             </div>
           </div>
         </div>
 
         {/* ------------------------------------------------------------- */}
-        {/* PAST ACTIVITY & HISTORY TABS                                  */}
+        {/* RECENT PRACTICE SECTION (Concise, authentic, up to 3 items)  */}
         {/* ------------------------------------------------------------- */}
-        <div className="border-t border-white/10 pt-8">
-          <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
-            <div className="flex items-center gap-2 p-1 rounded-2xl bg-slate-900 border border-white/10">
-              <button
-                onClick={() => setActiveTab("overview")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === "overview"
-                    ? "bg-white/10 text-white shadow"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                All History
-              </button>
-              <button
-                onClick={() => setActiveTab("interviews")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === "interviews"
-                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/30"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Bot className="h-3.5 w-3.5" />
-                <span>Personal Interviews ({sessionsList.length})</span>
-              </button>
-              <button
-                onClick={() => setActiveTab("gd")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === "gd"
-                    ? "bg-purple-600 text-white shadow-lg shadow-purple-600/30"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <Users className="h-3.5 w-3.5" />
-                <span>Group Discussions ({gdSessions.length})</span>
-              </button>
-              <button
-                onClick={() => setActiveTab("resumes")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                  activeTab === "resumes"
-                    ? "bg-slate-700 text-white shadow"
-                    : "text-slate-400 hover:text-white"
-                }`}
-              >
-                <FileText className="h-3.5 w-3.5" />
-                <span>Resumes ({resumes.length})</span>
-              </button>
+        <section className="bg-slate-900/40 border border-slate-800/80 rounded-3xl p-6 sm:p-8">
+          <div className="flex items-center justify-between border-b border-slate-800/80 pb-4 mb-5">
+            <div className="flex items-center gap-2.5">
+              <Clock className="h-4 w-4 text-indigo-400" />
+              <h3 className="text-sm sm:text-base font-bold text-white tracking-tight">
+                Recent Practice
+              </h3>
+              {unifiedRecentPractice.length > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[11px] font-mono font-semibold">
+                  {unifiedRecentPractice.length}
+                </span>
+              )}
             </div>
+
+            {unifiedRecentPractice.length > 0 && (
+              <button
+                onClick={() => setIsAllHistoryOpen(true)}
+                className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition"
+              >
+                <span>View all history</span>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
 
-          {/* TAB 1: PERSONAL INTERVIEW HISTORY */}
-          {(activeTab === "overview" || activeTab === "interviews") && (
-            <div className="mb-8">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Bot className="h-4 w-4 text-indigo-400" />
-                  Personal Interview Sessions
-                </h3>
-                <Link
-                  href="/interview/setup"
-                  className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1"
-                >
-                  <span>New Interview</span>
-                  <ArrowRight className="h-3 w-3" />
-                </Link>
-              </div>
-
-              {sessionsList.length > 0 ? (
-                <div className="space-y-3">
-                  {sessionsList.map((s) => {
-                    const feedback = s.feedback as any;
-                    const hasFeedback = feedback && feedback.overall_score !== undefined;
-                    const score = hasFeedback ? Number(feedback.overall_score).toFixed(1) : null;
-                    const isCompleted = s.status === "completed" || s.interview_status === "completed";
-
-                    return (
-                      <div
-                        key={s.id}
-                        className="p-4 sm:p-5 rounded-2xl bg-slate-900/80 border border-white/10 hover:border-indigo-500/30 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
-                      >
-                        <div className="space-y-1.5">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs font-bold text-white">{s.domain}</span>
-                            {s.company && (
-                              <span className="text-[11px] font-semibold text-slate-400">@ {s.company}</span>
-                            )}
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                isCompleted
-                                  ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
-                                  : "bg-indigo-500/15 text-indigo-400 border border-indigo-500/30"
-                              }`}
-                            >
-                              {isCompleted ? "Completed" : "Active / In Progress"}
-                            </span>
-                            <span className="text-[10px] font-mono text-slate-500">{s.difficulty} Level</span>
-                          </div>
-
-                          <div className="flex items-center gap-4 text-[11px] text-slate-400">
-                            <span>Duration: {s.duration_minutes || 30} mins</span>
-                            <span>Questions: {s.questions?.length || 0}</span>
-                            <span>Date: {new Date(s.created_at).toLocaleDateString()}</span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 shrink-0">
-                          {score && (
-                            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 font-mono font-bold text-xs">
-                              <Award className="h-3.5 w-3.5" />
-                              <span>Score: {score} / 5.0</span>
-                            </div>
-                          )}
-
-                          <button
-                            onClick={() => handleViewSessionFeedback(s)}
-                            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 flex items-center gap-2 transition-all hover:scale-[1.02]"
-                          >
-                            <Award className="h-3.5 w-3.5 text-indigo-200" />
-                            <span>{hasFeedback ? "View Feedback" : "Generate Feedback"}</span>
-                            <ArrowRight className="h-3.5 w-3.5" />
-                          </button>
-
-                          <button
-                            onClick={() => router.push(`/interview/${s.id}`)}
-                            className="px-3.5 py-2 rounded-xl glass-panel text-xs text-slate-300 hover:text-white hover:bg-white/5 transition-colors flex items-center gap-1.5"
-                          >
-                            <Bot className="h-3.5 w-3.5 text-indigo-400" />
-                            <span>Room</span>
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-white/5 text-slate-400 text-xs">
-                  No personal mock interviews conducted yet. Click &quot;Launch Personal Interview&quot; above to begin.
-                </div>
-              )}
+          {/* Loading State */}
+          {loadingHistory && (
+            <div className="py-8 flex flex-col items-center justify-center text-slate-500">
+              <Loader2 className="h-5 w-5 animate-spin mb-2 text-indigo-400" />
+              <p className="text-xs">Loading practice history...</p>
             </div>
           )}
 
-          {/* TAB 2: GROUP DISCUSSION HISTORY */}
-          {(activeTab === "overview" || activeTab === "gd") && (
-            <div className="mb-8">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Users className="h-4 w-4 text-purple-400" />
-                  Group Discussion Sessions
-                </h3>
-                <Link
-                  href="/gd/setup"
-                  className="text-xs text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1"
-                >
-                  <span>Create GD</span>
-                  <ArrowRight className="h-3 w-3" />
-                </Link>
-              </div>
-
-              {loadingGd ? (
-                <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-white/5 text-slate-400 text-xs">
-                  <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2 text-purple-400" />
-                  Loading discussions...
-                </div>
-              ) : gdSessions.length > 0 ? (
-                <div className="space-y-3">
-                  {gdSessions.map((s) => {
-                    const isCompleted = s.status === "completed";
-                    const inProgress = s.status === "in_progress";
-
-                    return (
-                      <div
-                        key={s.id}
-                        className="p-4 sm:p-5 rounded-2xl bg-slate-900/80 border border-white/10 hover:border-purple-500/30 transition-all flex flex-col md:flex-row md:items-center justify-between gap-4"
-                      >
-                        <div className="space-y-1.5 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono text-xs font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded border border-purple-500/20">
-                              {s.session_code}
-                            </span>
-                            <span className="text-xs font-semibold text-slate-300">{s.topic_category}</span>
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                isCompleted
-                                  ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
-                                  : inProgress
-                                  ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 animate-pulse"
-                                  : "bg-indigo-500/15 text-indigo-400 border border-indigo-500/30"
-                              }`}
-                            >
-                              {isCompleted ? "Completed" : inProgress ? "Live Now" : "Waiting for Peers"}
-                            </span>
-                          </div>
-
-                          <p className="text-sm font-semibold text-white leading-relaxed">{s.topic}</p>
-
-                          <div className="flex items-center gap-4 text-[11px] text-slate-400 pt-1">
-                            <span className="flex items-center gap-1">
-                              <Clock className="h-3 w-3 text-purple-400" />
-                              {s.duration_minutes} mins
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Users className="h-3 w-3 text-indigo-400" />
-                              {s.participants?.length || 1} / {s.max_participants} Peers
-                            </span>
-                            <span>Created: {new Date(s.created_at).toLocaleDateString()}</span>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3 shrink-0">
-                          {isCompleted ? (
-                            <button
-                              onClick={() => router.push(`/gd/feedback/${s.id}`)}
-                              className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-lg shadow-purple-600/30 flex items-center gap-2 transition-all hover:scale-[1.02]"
-                            >
-                              <Award className="h-3.5 w-3.5 text-purple-200" />
-                              <span>View My Evaluation</span>
-                              <ArrowRight className="h-3.5 w-3.5" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => router.push(`/gd/room/${s.session_code}`)}
-                              className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-purple-600/30 flex items-center gap-2 transition-all hover:scale-[1.02]"
-                            >
-                              <Users className="h-3.5 w-3.5 text-purple-200" />
-                              <span>Enter GD Room</span>
-                              <ArrowRight className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-white/5 text-slate-400 text-xs">
-                  No Group Discussion sessions recorded yet. Click &quot;Create Group Discussion&quot; above to host one.
-                </div>
-              )}
+          {/* Error State */}
+          {historyError && !loadingHistory && (
+            <div className="py-6 text-center text-xs text-slate-400">
+              {historyError}
             </div>
           )}
 
-          {/* TAB 3: RESUME MANAGEMENT */}
-          {(activeTab === "overview" || activeTab === "resumes") && (
-            <div className="mb-8">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-cyan-400" />
-                  Candidate Resumes
-                </h3>
-              </div>
+          {/* Empty State */}
+          {!loadingHistory && !historyError && displayRecentPractice.length === 0 && (
+            <div className="py-8 text-center text-slate-400 space-y-2">
+              <Compass className="h-8 w-8 text-slate-600 mx-auto mb-2" />
+              <p className="text-xs sm:text-sm text-slate-300 font-medium">
+                No practice sessions recorded yet.
+              </p>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                Start a personal interview or create a group discussion above to see your scores and feedback here.
+              </p>
+            </div>
+          )}
 
-              {resumes.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {resumes.map((r) => (
+          {/* Recent Practice List */}
+          {!loadingHistory && displayRecentPractice.length > 0 && (
+            <div className="space-y-3">
+              {displayRecentPractice.map((item) => (
+                <div
+                  key={`${item.type}-${item.id}`}
+                  className="bg-slate-950/60 border border-slate-800/80 hover:border-slate-700/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors"
+                >
+                  <div className="flex items-start gap-3 min-w-0">
                     <div
-                      key={r.id}
-                      className="p-4 rounded-2xl bg-slate-900/80 border border-white/10 flex items-start justify-between gap-3"
+                      className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                        item.type === "interview"
+                          ? "bg-indigo-600/20 text-indigo-400 border border-indigo-500/30"
+                          : "bg-purple-600/20 text-purple-400 border border-purple-500/30"
+                      }`}
                     >
-                      <div className="space-y-1 overflow-hidden">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-cyan-400 shrink-0" />
-                          <span className="text-xs font-bold text-white truncate">{r.original_filename}</span>
-                        </div>
-                        <p className="text-[11px] text-slate-400">
-                          {r.profile?.candidate_name || "Candidate"} • {(r.file_size / 1024).toFixed(1)} KB
-                        </p>
-                        {r.profile?.skills && r.profile.skills.length > 0 && (
-                          <div className="flex flex-wrap gap-1 pt-1.5">
-                            {r.profile.skills.slice(0, 6).map((sk, idx) => (
-                              <span
-                                key={idx}
-                                className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 text-[10px] border border-cyan-500/20"
-                              >
-                                {sk}
-                              </span>
-                            ))}
-                            {r.profile.skills.length > 6 && (
-                              <span className="text-[10px] text-slate-500 self-center">
-                                +{r.profile.skills.length - 6} more
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                      {item.type === "interview" ? (
+                        <Bot className="h-4 w-4" />
+                      ) : (
+                        <Users className="h-4 w-4" />
+                      )}
                     </div>
-                  ))}
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white truncate max-w-md">
+                          {item.title}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                            item.type === "interview"
+                              ? "bg-indigo-950 text-indigo-300 border border-indigo-800"
+                              : "bg-purple-950 text-purple-300 border border-purple-800"
+                          }`}
+                        >
+                          {item.type === "interview" ? "Personal" : "GD Arena"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {item.subtitle} • {item.date}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Actions & Score */}
+                  <div className="flex items-center gap-3 shrink-0 self-end sm:self-auto">
+                    {item.score !== undefined && (
+                      <span className="text-xs font-mono font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-lg">
+                        {item.score.toFixed(1)} / 5.0
+                      </span>
+                    )}
+
+                    {item.type === "interview" ? (
+                      <button
+                        onClick={() => handleViewInterviewReport(item.sessionRef)}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 hover:text-white transition flex items-center gap-1"
+                      >
+                        <span>View Feedback</span>
+                        <ArrowUpRight className="h-3.5 w-3.5" />
+                      </button>
+                    ) : (
+                      <Link
+                        href={`/gd/feedback/${item.id}`}
+                        className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 hover:text-white transition flex items-center gap-1"
+                      >
+                        <span>View Scorecard</span>
+                        <ArrowUpRight className="h-3.5 w-3.5" />
+                      </Link>
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-white/5 text-slate-400 text-xs">
-                  No resumes uploaded yet. You can upload a resume when launching a Personal Interview.
-                </div>
-              )}
+              ))}
             </div>
           )}
-        </div>
+        </section>
       </main>
 
-      {/* Comprehensive Feedback Report Modal */}
+      {/* ------------------------------------------------------------- */}
+      {/* ALL PRACTICE SESSIONS MODAL (Clean, isolated, not on landing) */}
+      {/* ------------------------------------------------------------- */}
+      {isAllHistoryOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111726] border border-slate-800 rounded-3xl max-w-2xl w-full max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+              <div className="flex items-center gap-2">
+                <Clock className="h-5 w-5 text-indigo-400" />
+                <h3 className="text-base font-bold text-white">All Practice History</h3>
+              </div>
+              <button
+                onClick={() => setIsAllHistoryOpen(false)}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="px-5 pt-3 pb-2 border-b border-slate-800 flex gap-2">
+              <button
+                onClick={() => setHistoryTab("all")}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                  historyTab === "all"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
+                }`}
+              >
+                All ({unifiedRecentPractice.length})
+              </button>
+              <button
+                onClick={() => setHistoryTab("interviews")}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                  historyTab === "interviews"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
+                }`}
+              >
+                Personal Interviews ({sessionsList.length})
+              </button>
+              <button
+                onClick={() => setHistoryTab("gd")}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                  historyTab === "gd"
+                    ? "bg-purple-600 text-white"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
+                }`}
+              >
+                GD Arena ({gdSessions.length})
+              </button>
+            </div>
+
+            {/* Modal List */}
+            <div className="p-5 overflow-y-auto space-y-3 flex-1">
+              {unifiedRecentPractice
+                .filter((item) =>
+                  historyTab === "all" ? true : item.type === (historyTab === "interviews" ? "interview" : "gd")
+                )
+                .map((item) => (
+                  <div
+                    key={`modal-${item.type}-${item.id}`}
+                    className="bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-white truncate">{item.title}</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {item.subtitle} • {item.date}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {item.score !== undefined && (
+                        <span className="text-[11px] font-mono font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded">
+                          {item.score.toFixed(1)} / 5.0
+                        </span>
+                      )}
+                      {item.type === "interview" ? (
+                        <button
+                          onClick={() => {
+                            setIsAllHistoryOpen(false);
+                            handleViewInterviewReport(item.sessionRef);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white text-xs font-semibold transition"
+                        >
+                          Feedback
+                        </button>
+                      ) : (
+                        <Link
+                          href={`/gd/feedback/${item.id}`}
+                          className="px-2.5 py-1 rounded-lg bg-purple-600/30 hover:bg-purple-600 text-purple-200 hover:text-white text-xs font-semibold transition"
+                        >
+                          Scorecard
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Personal Interview Feedback Modal Component */}
       <FeedbackReportModal
         isOpen={isFeedbackModalOpen}
         onClose={() => setIsFeedbackModalOpen(false)}
