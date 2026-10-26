@@ -60,10 +60,6 @@ export default function DashboardPage() {
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
   const [isLoadingFeedback, setIsLoadingFeedback] = useState(false);
 
-  // Quick Join State for GD
-  const [quickJoinInput, setQuickJoinInput] = useState("");
-  const [quickJoinError, setQuickJoinError] = useState<string | null>(null);
-
   // Load user data, past interviews, and past GD sessions
   useEffect(() => {
     async function init() {
@@ -138,32 +134,6 @@ export default function DashboardPage() {
     } finally {
       setIsSaving(false);
     }
-  };
-
-  // Quick join GD discussion handler
-  const handleQuickJoin = (e: React.FormEvent) => {
-    e.preventDefault();
-    setQuickJoinError(null);
-    const trimmed = quickJoinInput.trim();
-    if (!trimmed) {
-      setQuickJoinError("Enter a session code (e.g. PREPX-GD-12345) or invitation link.");
-      return;
-    }
-
-    if (trimmed.includes("/gd/join/")) {
-      const token = trimmed.split("/gd/join/")[1]?.split("?")[0];
-      if (token) {
-        router.push(`/gd/join/${token}`);
-        return;
-      }
-    }
-
-    if (trimmed.toUpperCase().startsWith("PREPX-GD-")) {
-      router.push(`/gd/room/${trimmed.toUpperCase()}`);
-      return;
-    }
-
-    router.push(`/gd/room/${trimmed}`);
   };
 
   // Format combined recent practice sessions (up to 3 items)
@@ -449,8 +419,8 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* Clear Primary CTA & Compact Quick Join */}
-            <div className="space-y-3 pt-2">
+            {/* Clear Primary CTA */}
+            <div className="pt-2">
               <button
                 onClick={() => router.push("/gd/setup")}
                 className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-sm shadow-xl shadow-purple-600/30 flex items-center justify-center gap-2 transition-all hover:scale-[1.01]"
@@ -458,29 +428,6 @@ export default function DashboardPage() {
                 <span>Enter GD Arena</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
-
-              {/* Inline Quick Join for Existing Session */}
-              <form onSubmit={handleQuickJoin} className="flex items-center gap-2 pt-1">
-                <input
-                  type="text"
-                  value={quickJoinInput}
-                  onChange={(e) => setQuickJoinInput(e.target.value)}
-                  placeholder="Enter session code (e.g. PREPX-GD-XXXXX)..."
-                  className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-900 border border-white/10 text-white text-xs placeholder-slate-500 focus:outline-none focus:border-purple-500"
-                />
-                <button
-                  type="submit"
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-semibold text-xs border border-white/10 shrink-0 transition"
-                >
-                  Join
-                </button>
-              </form>
-
-              {quickJoinError && (
-                <p className="text-[11px] text-red-400 bg-red-500/10 border border-red-500/20 p-2 rounded-lg">
-                  {quickJoinError}
-                </p>
-              )}
             </div>
           </div>
         </div>

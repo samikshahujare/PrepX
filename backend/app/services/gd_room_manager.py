@@ -233,9 +233,10 @@ class GDRoomManager:
         if not room:
             return
 
+        norm_exclude = exclude_participant_id.strip().lower() if exclude_participant_id else None
         disconnected_ids = []
         for pid, ws in list(room.connections.items()):
-            if exclude_participant_id and pid == exclude_participant_id:
+            if norm_exclude and pid.strip().lower() == norm_exclude:
                 continue
             try:
                 await ws.send_json(message)

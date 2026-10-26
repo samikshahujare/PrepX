@@ -135,6 +135,7 @@ export default function GDRoomPage() {
     sarahSpeakingRef.current = false;
     setSarahAvatarState("listening");
     sttProviderRef.current?.setModeratorSpeaking(false);
+    audioRelayRef.current?.setModeratorSpeaking(false);
     if (pendingSarahOnEndRef.current) {
       const cb = pendingSarahOnEndRef.current;
       pendingSarahOnEndRef.current = null;
@@ -149,8 +150,9 @@ export default function GDRoomPage() {
     setSarahAvatarState("speaking");
     pendingSarahOnEndRef.current = onEnd || null;
 
-    // Immediately gate candidate STT to eliminate Sarah echo
+    // Immediately gate candidate STT and Audio Relay to eliminate Sarah echo
     sttProviderRef.current?.setModeratorSpeaking(true);
+    audioRelayRef.current?.setModeratorSpeaking(true);
 
     const wordCount = (text || "").split(/\s+/).length;
     const estimatedDurationMs = Math.max(3500, wordCount * 450);
@@ -164,6 +166,7 @@ export default function GDRoomPage() {
           sarahSpeakingRef.current = false;
           setSarahAvatarState("listening");
           sttProviderRef.current?.setModeratorSpeaking(false);
+          audioRelayRef.current?.setModeratorSpeaking(false);
           if (pendingSarahOnEndRef.current) {
             const cb = pendingSarahOnEndRef.current;
             pendingSarahOnEndRef.current = null;
@@ -426,7 +429,7 @@ export default function GDRoomPage() {
       relay.cleanup();
       stt.stopListening();
     };
-  }, [session, myParticipant]);
+  }, [session?.id, myParticipant?.id]);
 
   // 3. Timer Countdown Lifecycle
   useEffect(() => {
@@ -489,8 +492,17 @@ export default function GDRoomPage() {
       case "AUDIO_CHUNK":
       case "AUDIO_RELAY": {
         const audioData = msg.audio_data || msg.data;
-        if (audioRelayRef.current && audioData && msg.sender_id) {
-          audioRelayRef.current.playPeerAudioChunk(msg.sender_id, audioData, msg.sample_rate);
+        const senderId = msg.sender_id || msg.participant_id;
+        // Strict self-exclusion to eliminate local echo loop
+        if (
+          myParticipantRef.current &&
+          senderId &&
+          senderId.trim().toLowerCase() === myParticipantRef.current.id.trim().toLowerCase()
+        ) {
+          break;
+        }
+        if (audioRelayRef.current && audioData && senderId) {
+          audioRelayRef.current.playPeerAudioChunk(senderId, audioData, msg.sample_rate);
         }
         break;
       }

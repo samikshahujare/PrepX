@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import { useRouter } from "next/navigation";
 import { GDSession } from "@/types";
 import {
@@ -8,12 +8,10 @@ import {
   Sparkles,
   ArrowRight,
   PlusCircle,
-  Link as LinkIcon,
   Clock,
   Award,
   Layers,
   CheckCircle2,
-  AlertCircle,
   Loader2,
 } from "lucide-react";
 
@@ -25,34 +23,6 @@ interface GDArenaCardProps {
 
 export default function GDArenaCard({ sessions, loading, onRefresh }: GDArenaCardProps) {
   const router = useRouter();
-  const [joinInput, setJoinInput] = useState("");
-  const [joinError, setJoinError] = useState<string | null>(null);
-
-  const handleJoinByCodeOrUrl = (e: React.FormEvent) => {
-    e.preventDefault();
-    setJoinError(null);
-    const trimmed = joinInput.trim();
-    if (!trimmed) {
-      setJoinError("Please enter a valid session code (e.g. PREPX-GD-12345) or full invitation URL.");
-      return;
-    }
-
-    if (trimmed.includes("/gd/join/")) {
-      const token = trimmed.split("/gd/join/")[1]?.split("?")[0];
-      if (token) {
-        router.push(`/gd/join/${token}`);
-        return;
-      }
-    }
-
-    if (trimmed.toUpperCase().startsWith("PREPX-GD-")) {
-      router.push(`/gd/room/${trimmed.toUpperCase()}`);
-      return;
-    }
-
-    // Attempt token or code navigation
-    router.push(`/gd/room/${trimmed}`);
-  };
 
   return (
     <div className="space-y-6">
@@ -85,42 +55,6 @@ export default function GDArenaCard({ sessions, loading, onRefresh }: GDArenaCar
           </button>
         </div>
       </div>
-
-      {/* Quick Join With Link or Session Code */}
-      <div className="glass-panel p-5 rounded-2xl border border-white/10 flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="h-9 w-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shrink-0">
-            <LinkIcon className="h-4 w-4" />
-          </div>
-          <div>
-            <h3 className="text-xs font-bold text-white">Join Existing Discussion</h3>
-            <p className="text-[11px] text-slate-400">Have an invitation code or link from a peer?</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleJoinByCodeOrUrl} className="flex items-center gap-2 w-full sm:w-auto flex-1 max-w-md">
-          <input
-            type="text"
-            value={joinInput}
-            onChange={(e) => setJoinInput(e.target.value)}
-            placeholder="Paste PREPX-GD-XXXXX or Invite URL..."
-            className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-white/10 text-white text-xs placeholder-slate-500 focus:outline-none focus:border-purple-500"
-          />
-          <button
-            type="submit"
-            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-md shadow-indigo-600/30 shrink-0 transition-all"
-          >
-            Join
-          </button>
-        </form>
-      </div>
-
-      {joinError && (
-        <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-xs text-red-300 flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 text-red-400 shrink-0" />
-          <span>{joinError}</span>
-        </div>
-      )}
 
       {/* GD Sessions History Table */}
       <div className="glass-panel p-6 sm:p-8 rounded-2xl border border-white/10 shadow-2xl">

@@ -27,6 +27,8 @@ export class AudioRelayClient {
   private peerSpeakingTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private peerPlayTimelines: Map<string, number> = new Map();
   private silenceHangoverFrames: number = 0;
+  private isModeratorSpeaking: boolean = false;
+  private moderatorSpeakingHangoverFrames: number = 0;
 
   constructor(
     participantId: string,
@@ -38,8 +40,27 @@ export class AudioRelayClient {
     this.callbacks = callbacks;
   }
 
+  public setParticipantId(participantId: string) {
+    this.participantId = participantId;
+  }
+
+  public setDisplayName(displayName: string) {
+    this.displayName = displayName;
+  }
+
   public setWebSocket(ws: WebSocket | null) {
     this.ws = ws;
+  }
+
+  public setModeratorSpeaking(speaking: boolean) {
+    this.isModeratorSpeaking = speaking;
+    if (speaking) {
+      this.silenceHangoverFrames = 0;
+      this.callbacks.onLocalAudioLevel?.(0);
+    } else {
+      // ~360ms of acoustic room reverberation suppression after Sarah finishes speaking
+      this.moderatorSpeakingHangoverFrames = 8;
+    }
   }
 
   public async startCapture(): Promise<MediaStream> {
@@ -53,6 +74,7 @@ export class AudioRelayClient {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          channelCount: 1,
         },
       });
 
@@ -80,7 +102,7 @@ export class AudioRelayClient {
 
       // Route through silent gain to prevent local speaker loopback/echo
       this.silentGain = this.audioContext.createGain();
-      this.silentGain.gain.value = 0;
+      this.silentGain.gain.setValueAtTime(0, this.audioContext.currentTime);
 
       this.sourceNode.connect(this.scriptProcessor);
       this.scriptProcessor.connect(this.silentGain);
@@ -88,6 +110,17 @@ export class AudioRelayClient {
 
       this.scriptProcessor.onaudioprocess = (e: AudioProcessingEvent) => {
         if (!this.isRunning || this.isMuted) {
+          this.callbacks.onLocalAudioLevel?.(0);
+          return;
+        }
+
+        // Acoustic feedback suppression: suppress mic relay while AI moderator is speaking
+        if (this.isModeratorSpeaking) {
+          this.callbacks.onLocalAudioLevel?.(0);
+          return;
+        }
+        if (this.moderatorSpeakingHangoverFrames > 0) {
+          this.moderatorSpeakingHangoverFrames--;
           this.callbacks.onLocalAudioLevel?.(0);
           return;
         }
@@ -186,7 +219,11 @@ export class AudioRelayClient {
   }
 
   public async playPeerAudioChunk(senderId: string, base64Data: string, peerSampleRate?: number) {
-    if (senderId === this.participantId || !base64Data) return; // Never loopback local voice
+    if (!senderId || !base64Data) return;
+    // Never loopback local voice (normalized check)
+    if (this.participantId && senderId.trim().toLowerCase() === this.participantId.trim().toLowerCase()) {
+      return;
+    }
 
     // Trigger visual speaking indicator
     this.callbacks.onPeerSpeaking?.(senderId, true);
