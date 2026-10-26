@@ -149,7 +149,13 @@ def get_gd_session(
                 if part:
                     is_authorized = True
             except (ValueError, TypeError):
-                pass
+                part = (
+                    db.query(GDParticipant)
+                    .filter(GDParticipant.guest_id == pid, GDParticipant.session_id == session.id)
+                    .first()
+                )
+                if part:
+                    is_authorized = True
 
     if not is_authorized:
         raise UnauthorizedException("Authentication or valid participant identity required to access session details.")
@@ -388,21 +394,27 @@ def validate_gd_invitation(
 def join_gd_session(
     token: str,
     join_data: GDJoinRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     service = GDService(db)
     val = service.validate_invitation(token)
     session_id = uuid.UUID(val["session"]["id"])
 
+    user = get_optional_current_user(request, db)
+    user_id = user.id if user else None
+
     participant = service.join_participant(
         session_id=session_id,
         display_name=join_data.display_name,
-        user_id=None,
+        user_id=user_id,
         guest_id=join_data.guest_id,
     )
+    resp = GDParticipantResponse.model_validate(participant)
+    resp.session_code = val["session"]["session_code"]
     return ApiResponse(
         success=True,
-        data=GDParticipantResponse.model_validate(participant),
+        data=resp,
         message="Joined Group Discussion successfully.",
     )
 
@@ -412,31 +424,77 @@ async def gd_websocket_endpoint(
     websocket: WebSocket,
     session_code: str,
     participant_id: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     """
     Real-time Group Discussion WebSocket gateway.
     Handles presence, live audio relay, and transcript broadcast.
     """
-    session_code_upper = session_code.upper()
-    pid_str = participant_id or ""
+    service = GDService(db)
+    session_code_clean = session_code.strip()
+    pid_clean = participant_id.strip().strip('"').strip("'") if participant_id else ""
+    pid_str = pid_clean
+
     try:
-        session = db.query(GDSession).filter(GDSession.session_code == session_code_upper).first()
+        session = None
+        try:
+            session = service.get_session_by_id_or_code(session_code_clean)
+        except Exception:
+            pass
+
         if not session:
             await websocket.close(code=1008, reason="Session not found")
             return
 
+        session_code_upper = session.session_code
+
         participant = None
-        if participant_id:
+        if pid_clean:
             try:
-                p_uuid = uuid.UUID(participant_id)
+                p_uuid = uuid.UUID(pid_clean)
                 participant = (
                     db.query(GDParticipant)
                     .filter(GDParticipant.id == p_uuid, GDParticipant.session_id == session.id)
                     .first()
                 )
-            except ValueError:
-                pass
+            except (ValueError, TypeError):
+                participant = (
+                    db.query(GDParticipant)
+                    .filter(GDParticipant.guest_id == pid_clean, GDParticipant.session_id == session.id)
+                    .first()
+                )
+
+        # Fallback: check JWT token if participant_id was not matched
+        if not participant:
+            jwt_token = token
+            if not jwt_token and "authorization" in websocket.headers:
+                auth_h = websocket.headers["authorization"]
+                if auth_h.startswith("Bearer "):
+                    jwt_token = auth_h.split(" ", 1)[1].strip()
+
+            if jwt_token:
+                try:
+                    payload = security.decode_token(jwt_token)
+                    if payload and payload.get("type") == "access" and payload.get("sub"):
+                        user_uuid = uuid.UUID(payload["sub"])
+                        participant = (
+                            db.query(GDParticipant)
+                            .filter(GDParticipant.user_id == user_uuid, GDParticipant.session_id == session.id)
+                            .first()
+                        )
+                        if not participant and user_uuid == session.creator_id:
+                            participant = (
+                                db.query(GDParticipant)
+                                .filter(GDParticipant.session_id == session.id, GDParticipant.is_host == True)
+                                .first()
+                            )
+                            if participant and not participant.user_id:
+                                participant.user_id = user_uuid
+                                db.commit()
+                                db.refresh(participant)
+                except Exception as e:
+                    logger.debug(f"[GD WS] Token verification fallback error: {e}")
 
         if not participant:
             await websocket.close(code=1008, reason="Participant not found")

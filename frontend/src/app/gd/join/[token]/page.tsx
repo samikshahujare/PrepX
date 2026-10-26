@@ -81,13 +81,26 @@ export default function GDJoinPage() {
 
       // Validate invitation with backend
       try {
-        const data = await gdService.validateInvitation(token);
-        if (data.status === "COMPLETED" || data.status === "CANCELLED") {
-          setValidationError(`This discussion session has already ended (Status: ${data.status}).`);
-        } else if (data.current_participants >= data.max_participants) {
+        const resData = await gdService.validateInvitation(token);
+        const sess = resData.session || resData;
+        const normalized: ValidationData = {
+          session_id: sess.id || resData.session_id || "",
+          session_code: sess.session_code || resData.session_code || "",
+          topic: sess.topic || resData.topic || "Group Discussion",
+          category: sess.topic_category || sess.category || resData.category || "General",
+          duration_minutes: sess.duration_minutes || resData.duration_minutes || 15,
+          max_participants: resData.max_participants || sess.max_participants || 6,
+          current_participants: resData.current_participants || 1,
+          status: (sess.status || resData.status || "waiting").toUpperCase(),
+          expires_at: resData.expires_at,
+        };
+
+        if (normalized.status === "COMPLETED" || normalized.status === "CANCELLED") {
+          setValidationError(`This discussion session has already ended (Status: ${normalized.status}).`);
+        } else if (resData.is_full || normalized.current_participants >= normalized.max_participants) {
           setValidationError("This discussion room has already reached its maximum participant capacity.");
         } else {
-          setSessionData(data);
+          setSessionData(normalized);
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : "Invalid or expired invitation token.";
@@ -163,13 +176,28 @@ export default function GDJoinPage() {
         display_name: displayName.trim(),
       });
 
-      // Save participant info in storage for room connection
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("prepx_gd_participant", JSON.stringify(participantInfo));
+      // Obtain session code or session UUID (NEVER participant ID)
+      const targetRoomCode =
+        participantInfo.session_code ||
+        sessionData?.session_code ||
+        participantInfo.session_id ||
+        sessionData?.session_id;
+
+      if (!targetRoomCode) {
+        throw new Error("Unable to identify session room code. Please refresh and try again.");
       }
 
-      const sessionCode = sessionData?.session_code || participantInfo.id;
-      router.push(`/gd/room/${sessionCode}`);
+      // Save participant info in storage with session_code attached for room connection
+      const participantToStore = {
+        ...participantInfo,
+        session_code: participantInfo.session_code || sessionData?.session_code || targetRoomCode,
+      };
+
+      if (typeof window !== "undefined") {
+        sessionStorage.setItem("prepx_gd_participant", JSON.stringify(participantToStore));
+      }
+
+      router.push(`/gd/room/${targetRoomCode}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Failed to join discussion session.";
       setJoinError(msg);

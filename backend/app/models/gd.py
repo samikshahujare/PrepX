@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 from datetime import datetime, timezone
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, JSON
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -112,6 +113,10 @@ class GDParticipant(Base):
     user = relationship("User", foreign_keys=[user_id])
     transcripts = relationship("GDTranscript", back_populates="participant")
     evaluations = relationship("GDEvaluation", back_populates="participant")
+
+    @property
+    def session_code(self) -> Optional[str]:
+        return self.session.session_code if self.session else None
 
 
 class GDInvitationToken(Base):

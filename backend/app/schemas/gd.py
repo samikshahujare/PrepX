@@ -35,6 +35,7 @@ class GDParticipantResponse(BaseModel):
     is_muted: bool
     joined_at: datetime
     left_at: Optional[datetime] = None
+    session_code: Optional[str] = None
 
     class Config:
         from_attributes = True

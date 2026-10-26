@@ -77,6 +77,8 @@ def test_gd_api_lifecycle(client, auth_headers):
     participant = join_res.json()["data"]
     assert participant["display_name"] == "Jordan Peer"
     assert participant["is_host"] is False
+    assert participant["session_code"] == session_code
+    assert participant["id"] != participant["session_id"]
     peer_participant_id = participant["id"]
 
     # 8. Guest retrieves session details using participant_id without user JWT
@@ -245,3 +247,73 @@ def test_gd_guest_isolation_from_private_endpoints(client, auth_headers):
         f"/api/v1/gd/sessions/{session_id}/evaluations/me?participant_id={fake_pid}"
     )
     assert res7.status_code == 404
+
+
+def test_gd_join_and_room_resolution_isolated(client, auth_headers):
+    # 1. Host creates GD session
+    create_res = client.post(
+        "/api/v1/gd/sessions",
+        json={
+            "topic": "Architecture Decisions in Modern Web Frameworks",
+            "topic_category": "Technology & AI",
+            "duration_minutes": 20,
+            "max_participants": 5,
+        },
+        headers={"Authorization": auth_headers["Authorization"]},
+    )
+    assert create_res.status_code == 201
+    sess_data = create_res.json()["data"]
+    session_id = sess_data["id"]
+    session_code = sess_data["session_code"]
+
+    # 2. Host generates invitation token
+    invite_res = client.post(
+        f"/api/v1/gd/sessions/{session_id}/invitations",
+        headers={"Authorization": auth_headers["Authorization"]},
+    )
+    assert invite_res.status_code == 201
+    token = invite_res.json()["data"]["token"]
+
+    # 3. Public validation endpoint returns nested session structure with session_code
+    val_res = client.get(f"/api/v1/gd/invitations/{token}/validate")
+    assert val_res.status_code == 200
+    val_data = val_res.json()["data"]
+    assert val_data["is_valid"] is True
+    assert val_data["session"]["session_code"] == session_code
+    assert val_data["session"]["id"] == session_id
+
+    # 4. Guest joins using invitation token
+    join_res = client.post(
+        f"/api/v1/gd/invitations/{token}/join",
+        json={"display_name": "Sam Guest", "guest_id": "guest_sam_123"},
+    )
+    assert join_res.status_code == 200
+    part = join_res.json()["data"]
+    participant_id = part["id"]
+    part_session_id = part["session_id"]
+    part_session_code = part["session_code"]
+
+    # Participant ID is distinct from Session ID
+    assert participant_id != session_id
+    assert part_session_id == session_id
+    assert part_session_code == session_code
+
+    # 5. BUG REPRODUCTION TEST:
+    # If client attempts to query session using participant_id as the session identifier,
+    # the backend MUST return 404 Not Found (cannot treat participant UUID as session UUID)
+    bad_req = client.get(f"/api/v1/gd/sessions/{participant_id}?participant_id={participant_id}")
+    assert bad_req.status_code == 404
+
+    # 6. Correct queries: by session_code or session_id with participant_id returns 200 OK
+    good_by_code = client.get(f"/api/v1/gd/sessions/{session_code}?participant_id={participant_id}")
+    assert good_by_code.status_code == 200
+    assert good_by_code.json()["data"]["id"] == session_id
+
+    good_by_id = client.get(f"/api/v1/gd/sessions/{session_id}?participant_id={participant_id}")
+    assert good_by_id.status_code == 200
+    assert good_by_id.json()["data"]["session_code"] == session_code
+
+    # 7. Querying with guest_id also succeeds for guest participants
+    good_by_guest = client.get(f"/api/v1/gd/sessions/{session_code}?participant_id=guest_sam_123")
+    assert good_by_guest.status_code == 200
+

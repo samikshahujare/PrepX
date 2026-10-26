@@ -182,11 +182,13 @@ export default function GDRoomPage() {
       if (!sessionCode) return;
 
       let storedPartId: string | undefined;
+      let cachedParticipant: GDParticipant | null = null;
       if (typeof window !== "undefined") {
         const stored = sessionStorage.getItem("prepx_gd_participant");
         if (stored) {
           try {
-            storedPartId = JSON.parse(stored)?.id;
+            cachedParticipant = JSON.parse(stored);
+            storedPartId = cachedParticipant?.id;
           } catch {}
         }
       }
@@ -206,15 +208,21 @@ export default function GDRoomPage() {
 
         // Identify current participant
         let part: GDParticipant | null = null;
-        if (typeof window !== "undefined") {
-          const stored = sessionStorage.getItem("prepx_gd_participant");
-          if (stored) {
-            try {
-              part = JSON.parse(stored);
-            } catch {}
+
+        // 1. Verify cached participant belongs to THIS session
+        if (cachedParticipant) {
+          const belongsToThisSession =
+            cachedParticipant.session_id === sess.id ||
+            cachedParticipant.session_code === sess.session_code ||
+            sess.participants?.some((p) => p.id === cachedParticipant?.id);
+
+          if (belongsToThisSession) {
+            const foundInSession = sess.participants?.find((p) => p.id === cachedParticipant?.id);
+            part = foundInSession || cachedParticipant;
           }
         }
 
+        // 2. If authenticated user, find participant by user_id
         if (!part && authService.isAuthenticated()) {
           try {
             const user = await authService.getCurrentUser();
@@ -223,9 +231,15 @@ export default function GDRoomPage() {
           } catch {}
         }
 
-        if (!part && sess.participants && sess.participants.length > 0) {
-          const hostPart = sess.participants.find((p) => p.is_host);
-          if (hostPart) part = hostPart;
+        // 3. Fallback: If current user created this session and is host
+        if (!part && authService.isAuthenticated()) {
+          try {
+            const user = await authService.getCurrentUser();
+            if (user?.id === sess.creator_id) {
+              const hostPart = sess.participants?.find((p) => p.is_host);
+              if (hostPart) part = hostPart;
+            }
+          } catch {}
         }
 
         if (!part) {
@@ -309,9 +323,12 @@ export default function GDRoomPage() {
       }
     }
 
+    const token = typeof window !== "undefined" ? localStorage.getItem("prepx_access_token") : null;
+    const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : "";
+
     const wsUrl = `${wsBaseUrl}/api/v1/gd/ws/${session.session_code}?participant_id=${myParticipant.id}&display_name=${encodeURIComponent(
       myParticipant.display_name
-    )}&is_host=${myParticipant.is_host || myParticipant.role === "host" ? "true" : "false"}`;
+    )}&is_host=${myParticipant.is_host || myParticipant.role === "host" ? "true" : "false"}${tokenQuery}`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

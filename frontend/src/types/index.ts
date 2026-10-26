@@ -250,6 +250,7 @@ export interface InterviewFeedbackReport {
 export interface GDParticipant {
   id: string;
   session_id: string;
+  session_code?: string | null;
   user_id?: string | null;
   guest_id?: string | null;
   display_name: string;

@@ -155,3 +155,60 @@ def test_gd_websocket_speaker_attribution_and_echo_suppression(client, db_sessio
             })
             # No duplicate chunk broadcast
 
+
+def test_gd_websocket_connection_variations(client, db_session):
+    import uuid
+    from starlette.websockets import WebSocketDisconnect
+    from app.core import security
+
+    # 1. Create a user and GD session
+    user = User(email="ws_variations@prepx.ai", password_hash="fakehash", is_active=True)
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    gd_service = GDService(db_session)
+    session = gd_service.create_session(
+        creator_id=user.id,
+        data=GDSessionCreate(
+            topic="Microservices vs Monoliths in High-Scale Architectures",
+            topic_category="Technology & AI",
+            duration_minutes=15,
+            max_participants=4,
+        ),
+        host_name="Host Jordan",
+    )
+    host_participant = session.participants[0]
+
+    # Add peer participant with guest_id
+    peer_participant = gd_service.join_participant(
+        session_id=session.id,
+        display_name="Peer Taylor",
+        guest_id="guest_peer_taylor_ws",
+    )
+
+    # A. Test connecting via session UUID in path
+    with client.websocket_connect(f"/api/v1/gd/ws/{session.id}?participant_id={host_participant.id}") as ws_uuid:
+        init_msg = ws_uuid.receive_json()
+        assert init_msg["type"] == "ROOM_STATE"
+        assert init_msg["session_code"] == session.session_code
+
+    # B. Test connecting using guest_id instead of UUID participant_id
+    with client.websocket_connect(f"/api/v1/gd/ws/{session.session_code}?participant_id=guest_peer_taylor_ws") as ws_guest:
+        init_msg = ws_guest.receive_json()
+        assert init_msg["type"] == "ROOM_STATE"
+
+    # C. Test connecting with JWT token when participant_id is omitted
+    token = security.create_access_token(subject=user.id)
+    with client.websocket_connect(f"/api/v1/gd/ws/{session.session_code}?token={token}") as ws_token:
+        init_msg = ws_token.receive_json()
+        assert init_msg["type"] == "ROOM_STATE"
+
+    # D. Test rejection (code 1008) when participant cannot be verified
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        fake_uuid = str(uuid.uuid4())
+        with client.websocket_connect(f"/api/v1/gd/ws/{session.session_code}?participant_id={fake_uuid}"):
+            pass
+    assert exc_info.value.code == 1008
+
+
