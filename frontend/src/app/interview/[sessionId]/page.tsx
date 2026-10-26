@@ -33,7 +33,7 @@ import {
 export default function InterviewRoomPage() {
   const params = useParams();
   const router = useRouter();
-  const sessionId = params.sessionId as string;
+  const sessionId = (params?.sessionId as string) || "";
 
   // Authentication & Session data
   const [user, setUser] = useState<User | null>(null);
